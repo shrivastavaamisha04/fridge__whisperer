@@ -1,0 +1,83 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer components {
+  .bg-brand-500 {
+    background-color: #10b981 !important;
+  }
+
+  .bg-brand-600 {
+    background-color: #059669 !important;
+  }
+
+  .text-brand-500 {
+    color: #10b981 !important;
+  }
+
+  .text-brand-600 {
+    color: #059669 !important;
+  }
+
+  .border-brand-500 {
+    border-color: #10b981 !important;
+  }
+
+  .ring-brand-500 {
+    --tw-ring-color: #10b981 !important;
+  }
+
+  .shadow-brand-500\/25 {
+    --tw-shadow-color: rgba(16, 185, 129, 0.25) !important;
+  }
+
+  .active\:scale-\[0\.97\]:active {
+    transform: scale(0.97);
+  }
+}
+
+@layer base {
+  body {
+    @apply font-sans bg-[#fcfdfa] text-slate-800 m-0 overflow-x-hidden;
+    -webkit-tap-highlight-color: transparent;
+  }
+}
+
+@layer utilities {
+  .bg-icon {
+    @apply fixed -z-10 opacity-15 pointer-events-none text-[3rem];
+  }
+
+  .shadow-soft {
+    box-shadow: 0 10px 40px -10px rgba(0, 0, 0, 0.06);
+  }
+
+  .rounded-header {
+    border-bottom-left-radius: 5rem;
+    border-bottom-right-radius: 5rem;
+  }
+
+  .checklist-glass {
+    background: rgba(255, 255, 255, 0.8);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+  }
+}
+
+@keyframes float {
+  0% {
+    transform: translateY(0px) rotate(0deg);
+  }
+
+  50% {
+    transform: translateY(-10px) rotate(5deg);
+  }
+
+  100% {
+    transform: translateY(0px) rotate(0deg);
+  }
+}
+
+.animate-float {
+  animation: float 6s ease-in-out infinite;
+}

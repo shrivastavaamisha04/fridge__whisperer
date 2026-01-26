@@ -1,0 +1,49 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+    body {
+        @apply font-sans bg-[#fcfdfa] text-slate-800 m-0 overflow-x-hidden;
+        -webkit-tap-highlight-color: transparent;
+    }
+}
+
+@layer utilities {
+    .bg-icon {
+        @apply fixed -z-10 opacity-15 pointer-events-none text-[3rem];
+    }
+
+    .shadow-soft {
+        box-shadow: 0 10px 40px -10px rgba(0, 0, 0, 0.06);
+    }
+
+    .rounded-header {
+        border-bottom-left-radius: 5rem;
+        border-bottom-right-radius: 5rem;
+    }
+
+    .checklist-glass {
+        background: rgba(255, 255, 255, 0.8);
+        backdrop-filter: blur(20px);
+        -webkit-backdrop-filter: blur(20px);
+    }
+}
+
+@keyframes float {
+    0% {
+        transform: translateY(0px) rotate(0deg);
+    }
+
+    50% {
+        transform: translateY(-10px) rotate(5deg);
+    }
+
+    100% {
+        transform: translateY(0px) rotate(0deg);
+    }
+}
+
+.animate-float {
+    animation: float 6s ease-in-out infinite;
+}
