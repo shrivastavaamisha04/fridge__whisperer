@@ -346,18 +346,7 @@ export default function App() {
                 <p className="text-[9px] font-bold text-slate-400 italic">Share this key with housemates so they can stay in sync.</p>
               </div>
 
-              {/* Simplified Coming Soon Banner */}
-              <div className="relative overflow-hidden p-6 rounded-[2rem] bg-slate-50 border border-slate-100 shadow-inner">
-                <div className="relative z-10">
-                  <span className="text-[10px] font-black text-slate-400 uppercase tracking-[0.15em] flex items-center gap-2 mb-2">
-                    <span className="w-1.5 h-1.5 rounded-full bg-brand-500"></span>
-                    Coming soon
-                  </span>
-                  <p className="text-xs font-bold text-slate-500 leading-relaxed">
-                    We're building <span className="text-brand-600 font-black">Real-time Sync</span> so your whole household sees every fridge update instantly.
-                  </p>
-                </div>
-              </div>
+
 
               <div className="p-4 bg-indigo-50 rounded-2xl border border-indigo-100 mb-4">
                 <div className="flex items-center justify-between">
