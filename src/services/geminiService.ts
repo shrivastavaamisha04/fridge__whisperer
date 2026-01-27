@@ -25,11 +25,11 @@ export async function getFoodInfo(foodName: string): Promise<FoodInfoResponse> {
     });
 
     const result = await model.generateContent(
-      `Provide groery item info for "${foodName}". 
-      - Category: MUST be one of ['Fruit', 'Vegetable', 'Dairy', 'Meat', 'Bakery'].
-      - If unsure (e.g. pantry items), pick the closest match (e.g. Bakery for bread/grains, Vegetable for plant-based).
+      `Provide grocery item info for "${foodName}". 
+      - Category: MUST be one of ['Fruit', 'Vegetable', 'Dairy', 'Meat', 'Bakery', 'Pantry', 'Frozen', 'Beverages', 'Snacks', 'Household'].
+      - If unsure (e.g. rice, pasta), use 'Pantry'. For ice cream, use 'Frozen'.
       - Days: estimated days to expiry.
-      - Emoji: one representative emoji.`
+      - Emoji: The single most specific emoji for this exact food item. (e.g. for "Grapes" return "🍇", NOT "🍎" or "🥗").`
     );
     const text = result.response.text();
     return JSON.parse(text) as FoodInfoResponse;

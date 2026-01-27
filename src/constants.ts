@@ -22,6 +22,14 @@ export const FALLBACK_FOOD_DATA: Record<string, { days: number; category: string
   'garlic': { days: 90, category: 'Vegetable', emoji: '🧄' },
   'lemon': { days: 14, category: 'Fruit', emoji: '🍋' },
   'basil': { days: 5, category: 'Vegetable', emoji: '🌿' },
+  'grapes': { days: 7, category: 'Fruit', emoji: '🍇' },
+  'grape': { days: 7, category: 'Fruit', emoji: '🍇' },
+  'carrots': { days: 21, category: 'Vegetable', emoji: '🥕' },
+  'carrot': { days: 21, category: 'Vegetable', emoji: '🥕' },
+  'potatoes': { days: 30, category: 'Vegetable', emoji: '🥔' },
+  'potato': { days: 30, category: 'Vegetable', emoji: '🥔' },
+  'juice': { days: 10, category: 'Beverages', emoji: '🧃' },
+  'rice': { days: 180, category: 'Pantry', emoji: '🍚' },
 };
 
-export const CATEGORIES = ['Fruit', 'Vegetable', 'Dairy', 'Meat', 'Bakery'];
+export const CATEGORIES = ['Fruit', 'Vegetable', 'Dairy', 'Meat', 'Bakery', 'Pantry', 'Frozen', 'Beverages', 'Snacks', 'Household'];
