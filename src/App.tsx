@@ -363,14 +363,13 @@ export default function App() {
             >
               Step out of this Kitchen
             </button>
+            <button
+              onClick={() => setIsSettingsOpen(false)}
+              className="w-full py-4 text-slate-300 hover:text-slate-500 font-black text-[11px] uppercase tracking-[0.3em] transition-colors"
+            >
+              Go Back
+            </button>
           </div>
-
-          <button
-            onClick={() => setIsSettingsOpen(false)}
-            className="w-full py-4 text-slate-300 hover:text-slate-500 font-black text-[11px] uppercase tracking-[0.3em] transition-colors"
-          >
-            Go Back
-          </button>
         </div>
       )}
 
