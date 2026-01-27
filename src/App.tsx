@@ -357,18 +357,20 @@ export default function App() {
               </div>
             </div>
 
-            <button
-              onClick={handleLogout}
-              className="w-full py-5 bg-rose-50/50 text-rose-500 font-black rounded-3xl hover:bg-rose-100/50 active:scale-[0.98] transition-all text-sm tracking-wide"
-            >
-              Step out of this Kitchen
-            </button>
-            <button
-              onClick={() => setIsSettingsOpen(false)}
-              className="w-full py-4 text-slate-300 hover:text-slate-500 font-black text-[11px] uppercase tracking-[0.3em] transition-colors"
-            >
-              Go Back
-            </button>
+            <div className="space-y-3">
+              <button
+                onClick={handleLogout}
+                className="w-full py-5 bg-rose-50 text-rose-500 font-black rounded-3xl hover:bg-rose-100 active:scale-[0.98] transition-all text-xs uppercase tracking-widest shadow-sm hover:shadow-rose-100"
+              >
+                Step out of this Kitchen
+              </button>
+              <button
+                onClick={() => setIsSettingsOpen(false)}
+                className="w-full py-5 bg-slate-100 text-slate-400 font-black rounded-3xl hover:bg-slate-200 active:scale-[0.98] transition-all text-xs uppercase tracking-widest"
+              >
+                Go Back
+              </button>
+            </div>
           </div>
         </div>
       )}
