@@ -1,11 +1,11 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { FridgeItem, ShoppingItem } from './types';
 import { getFoodInfo } from './services/geminiService';
-import { storageService } from './services/storageService';
+import { supabaseService } from './services/supabaseService';
 import FridgeCard from './components/FridgeCard';
 
 const StrawberryWallpaper = () => (
-  <div 
+  <div
     className="fixed inset-0 pointer-events-none z-[-1] opacity-40"
     style={{
       backgroundColor: '#fdfbf7',
@@ -28,12 +28,12 @@ type SortOption = 'expiry' | 'name' | 'added';
 const QUANTITY_OPTIONS = ['100 gm', '200 gm', '500 gm', '1 kg', '2 kg'];
 
 export default function App() {
-  const [view, setView] = useState<'landing' | 'dashboard'>(() => 
+  const [view, setView] = useState<'landing' | 'dashboard'>(() =>
     localStorage.getItem('kitchen_id') ? 'dashboard' : 'landing'
   );
   const [kitchenId, setKitchenId] = useState(() => localStorage.getItem('kitchen_id') || '');
   const [userName, setUserName] = useState(() => localStorage.getItem('user_name') || '');
-  
+
   const [inventory, setInventory] = useState<FridgeItem[]>([]);
   const [shoppingList, setShoppingList] = useState<ShoppingItem[]>([]);
   const [sortBy, setSortBy] = useState<SortOption>('expiry');
@@ -43,26 +43,44 @@ export default function App() {
   const [newShoppingItem, setNewShoppingItem] = useState('');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [copyFeedback, setCopyFeedback] = useState(false);
+  const [synced, setSynced] = useState(false);
 
-  useEffect(() => {
-    if (kitchenId) {
-      const data = storageService.loadData(kitchenId);
-      setInventory(data.inventory || []);
-      setShoppingList(data.shoppingList || []);
-    }
-  }, [kitchenId]);
-
+  // Initial Load & Real-time Sync
   useEffect(() => {
     if (kitchenId && view === 'dashboard') {
-      storageService.saveData(kitchenId, inventory, shoppingList);
+      // 1. Initial Fetch
+      const load = async () => {
+        try {
+          const data = await supabaseService.fetchData(kitchenId);
+          setInventory(data.inventory);
+          setShoppingList(data.shoppingList);
+          setSynced(true);
+        } catch (error) {
+          console.error("Failed to load:", error);
+        }
+      };
+      load();
+
+      // 2. Subscribe to changes
+      const unsubscribe = supabaseService.subscribe(kitchenId, () => {
+        // Simple strategy: re-fetch on any change
+        load();
+      });
+
+      // Cleanup
       localStorage.setItem('kitchen_id', kitchenId);
       localStorage.setItem('user_name', userName);
+
+      return () => { unsubscribe(); };
     }
-  }, [inventory, shoppingList, kitchenId, view, userName]);
+  }, [kitchenId, view]);
+
+  // Removed the useEffect that saves to localStorage - we save to Cloud now!
 
   const handleStart = (e: React.FormEvent) => {
     e.preventDefault();
     if (userName.trim()) {
+      // If entering a new kitchen, create a truly unique ID if left blank
       if (!kitchenId.trim()) setKitchenId('HOME-' + Math.random().toString(36).substr(2, 5).toUpperCase());
       setView('dashboard');
     }
@@ -73,6 +91,8 @@ export default function App() {
       localStorage.removeItem('kitchen_id');
       localStorage.removeItem('user_name');
       setView('landing');
+      setInventory([]);
+      setShoppingList([]);
       setIsSettingsOpen(false);
     }
   };
@@ -89,7 +109,7 @@ export default function App() {
     try {
       const info = await getFoodInfo(name);
       const item: FridgeItem = {
-        id: Math.random().toString(36).substr(2, 9),
+        id: crypto.randomUUID(), // Better than random().toString()
         name: name.trim(),
         category: info.category,
         emoji: info.emoji,
@@ -97,14 +117,48 @@ export default function App() {
         expiresAt: Date.now() + (info.days * 86400000),
         quantity: itemQuantity,
       };
+
+      // OPTIMISTIC UPDATE (Show immediately)
       setInventory(prev => [item, ...prev]);
-      if (sourceId) setShoppingList(prev => prev.filter(x => x.id !== sourceId));
       setNewItem('');
+
+      // AB: Add to Cloud
+      await supabaseService.addItem(item, kitchenId);
+
+      if (sourceId) {
+        setShoppingList(prev => prev.filter(x => x.id !== sourceId));
+        await supabaseService.removeShoppingItem(sourceId);
+      }
     } catch (err) {
       console.error(err);
+      // Revert optimism if needed (skipped for MVP simplicity)
     } finally {
       setLoading(false);
     }
+  };
+
+  const removeItem = async (id: string) => {
+    setInventory(prev => prev.filter(x => x.id !== id)); // Optimistic
+    await supabaseService.removeItem(id);
+  };
+
+  const addToShoppingList = async () => {
+    if (!newShoppingItem.trim()) return;
+    const item: ShoppingItem = {
+      id: crypto.randomUUID(),
+      name: newShoppingItem.trim(),
+      emoji: '🛍️'
+    };
+
+    setShoppingList(prev => [...prev, item]); // Optimistic
+    setNewShoppingItem('');
+
+    await supabaseService.addShoppingItem(item, kitchenId);
+  };
+
+  const removeFromShoppingList = async (id: string) => {
+    setShoppingList(prev => prev.filter(x => x.id !== id)); // Optimistic
+    await supabaseService.removeShoppingItem(id);
   };
 
   const groupedInventory = useMemo(() => {
@@ -122,10 +176,41 @@ export default function App() {
     return groups;
   }, [inventory, sortBy]);
 
-  const addShoppingItem = () => {
+
+  const addShoppingItem = async () => {
     if (!newShoppingItem.trim()) return;
-    setShoppingList(prev => [...prev, { id: Math.random().toString(), name: newShoppingItem.trim(), emoji: '🛍️' }]);
+
+    // 1. Optimistic UI update (temporary emoji)
+    const tempId = crypto.randomUUID();
+    setShoppingList(prev => [...prev, { id: tempId, name: newShoppingItem.trim(), emoji: '⏳' }]);
     setNewShoppingItem('');
+
+    try {
+      // 2. Fetch AI info
+      const info = await getFoodInfo(newShoppingItem.trim());
+
+      const item: ShoppingItem = {
+        id: tempId,
+        name: newShoppingItem.trim(),
+        emoji: info.emoji || '🛍️'
+      };
+
+      // 3. Update state with real emoji
+      setShoppingList(prev => prev.map(x => x.id === tempId ? item : x));
+
+      // 4. Persist to DB
+      await supabaseService.addShoppingItem(item, kitchenId);
+    } catch (err) {
+      console.error(err);
+      // Fallback if AI fails (keep generic or update)
+      const fallbackItem: ShoppingItem = {
+        id: tempId,
+        name: newShoppingItem.trim(),
+        emoji: '🛍️'
+      };
+      setShoppingList(prev => prev.map(x => x.id === tempId ? fallbackItem : x));
+      await supabaseService.addShoppingItem(fallbackItem, kitchenId);
+    }
   };
 
   if (view === 'landing') {
@@ -140,7 +225,7 @@ export default function App() {
               <p className="text-slate-500/80 font-semibold mt-3 text-lg leading-snug max-w-[280px] mx-auto">Your household's shared brain for a zero-waste kitchen.</p>
             </div>
           </div>
-          
+
           <form onSubmit={handleStart} className="bg-white/90 backdrop-blur-md p-10 rounded-[3rem] shadow-soft space-y-8 border border-white">
             <div className="text-left space-y-6">
               <div className="space-y-2">
@@ -170,7 +255,7 @@ export default function App() {
             <h1 className="text-3xl font-extrabold tracking-tight">{userName}'s fridge space</h1>
             <p className="text-[11px] font-black opacity-70 uppercase tracking-[0.18em]">KITCHEN ID: {kitchenId}</p>
           </div>
-          <button 
+          <button
             onClick={() => setIsSettingsOpen(true)}
             className="w-12 h-12 bg-white/20 hover:bg-white/30 rounded-2xl flex items-center justify-center transition-all backdrop-blur-md border border-white/20 shadow-lg"
           >
@@ -191,13 +276,13 @@ export default function App() {
               <h3 className="text-2xl font-black text-slate-800 tracking-tight">Kitchen Heart</h3>
               <p className="text-slate-400 font-bold text-sm">Household Control Center</p>
             </div>
-            
+
             <div className="space-y-5">
               <div className="p-6 bg-slate-50/80 rounded-3xl border border-slate-100 flex flex-col gap-3">
                 <span className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] block">Your Secret Key</span>
                 <div className="flex items-center justify-between">
                   <span className="font-mono font-black text-brand-600 text-lg tracking-wider">{kitchenId}</span>
-                  <button 
+                  <button
                     onClick={copyToClipboard}
                     className={`px-5 py-2.5 rounded-xl font-black text-[10px] uppercase transition-all shadow-sm ${copyFeedback ? 'bg-emerald-500 text-white scale-95' : 'bg-brand-500 text-white active:scale-95'}`}
                   >
@@ -220,7 +305,7 @@ export default function App() {
                 </div>
               </div>
 
-              <button 
+              <button
                 onClick={handleLogout}
                 className="w-full py-5 bg-rose-50/50 text-rose-500 font-black rounded-3xl hover:bg-rose-100/50 active:scale-[0.98] transition-all text-sm tracking-wide"
               >
@@ -228,7 +313,7 @@ export default function App() {
               </button>
             </div>
 
-            <button 
+            <button
               onClick={() => setIsSettingsOpen(false)}
               className="w-full py-4 text-slate-300 hover:text-slate-500 font-black text-[11px] uppercase tracking-[0.3em] transition-colors"
             >
@@ -240,11 +325,11 @@ export default function App() {
 
       <main className="max-w-xl mx-auto px-6 -mt-10 space-y-12 relative z-20">
         <div className="bg-white p-2.5 pl-8 pr-2.5 rounded-[2.5rem] shadow-soft border border-slate-50 flex items-center gap-2 group transition-all focus-within:ring-4 focus-within:ring-brand-500/10">
-          <input 
+          <input
             value={newItem}
             onChange={e => setNewItem(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && addItemToFridge(newItem)}
-            placeholder="Add to fridge..." 
+            placeholder="Add to fridge..."
             className="flex-1 bg-transparent outline-none font-bold text-slate-700 placeholder:text-slate-300 text-lg min-w-0"
           />
           <select value={itemQuantity} onChange={e => setItemQuantity(e.target.value)} className="appearance-none bg-slate-50 border-none rounded-xl px-4 py-3 font-bold text-slate-500 text-sm cursor-pointer outline-none hover:bg-slate-100 transition-colors">
@@ -258,7 +343,7 @@ export default function App() {
         <div className="space-y-12">
           {/* New Heading: In the fridge */}
           <h2 className="text-[11px] font-black text-slate-400 uppercase tracking-[0.2em] px-4 -mb-6">In the fridge</h2>
-          
+
           {Object.entries(groupedInventory).map(([category, items]) => (
             <div key={category} className="space-y-6">
               <div className="flex items-center gap-4 px-4">
@@ -268,14 +353,19 @@ export default function App() {
               </div>
               <div className="space-y-4">
                 {items.map(item => (
-                  <FridgeCard 
-                    key={item.id} 
-                    item={item} 
-                    onRemove={(i) => setInventory(prev => prev.filter(x => x.id !== i.id))} 
-                    onMoveToList={(i) => {
+                  <FridgeCard
+                    key={item.id}
+                    item={item}
+                    onRemove={(i) => removeItem(i.id)}
+                    onMoveToList={async (i) => {
+                      // Optimistic move
                       setShoppingList(prev => [...prev, { id: i.id, name: i.name, emoji: i.emoji }]);
                       setInventory(prev => prev.filter(x => x.id !== i.id));
-                    }} 
+
+                      // Persist changes
+                      await supabaseService.addShoppingItem({ id: i.id, name: i.name, emoji: i.emoji }, kitchenId);
+                      await supabaseService.removeItem(i.id);
+                    }}
                   />
                 ))}
               </div>
@@ -302,11 +392,11 @@ export default function App() {
               </div>
             ))}
             <div className="pt-6 border-t border-slate-100">
-              <input 
+              <input
                 value={newShoppingItem}
                 onChange={e => setNewShoppingItem(e.target.value)}
                 onKeyDown={e => e.key === 'Enter' && addShoppingItem()}
-                placeholder="Add to shopping list..." 
+                placeholder="Add to shopping list..."
                 className="w-full bg-transparent outline-none font-bold text-slate-700 placeholder:text-slate-300 text-lg"
               />
             </div>

@@ -18,15 +18,15 @@ const FridgeCard: React.FC<FridgeCardProps> = ({ item, onRemove, onMoveToList })
   const timeRemaining = Math.max(0, item.expiresAt - now);
   const percentRemaining = (timeRemaining / totalShelfLife) * 100;
   const daysLeft = Math.ceil(timeRemaining / (1000 * 60 * 60 * 24));
-  
+
   // Dynamic color logic: Fresh (Emerald), Warning (Orange), Urgent/Expired (Rose/Red)
   let barColor = 'bg-[#10b981]'; // Emerald
   let textColor = 'text-slate-300';
-  
+
   if (daysLeft <= 2) {
     barColor = 'bg-rose-500'; // URGENT ROSE
     textColor = 'text-rose-500';
-  } else if (daysLeft <= 5) {
+  } else if (daysLeft <= 3) {
     barColor = 'bg-orange-400';
     textColor = 'text-orange-400';
   }
@@ -34,10 +34,10 @@ const FridgeCard: React.FC<FridgeCardProps> = ({ item, onRemove, onMoveToList })
   return (
     <div className="relative group animate-in fade-in slide-in-from-bottom-2 duration-500">
       <div className="bg-white rounded-[2.5rem] p-4 pl-5 pr-5 flex items-center justify-between shadow-soft border border-slate-50/50 transition-all hover:shadow-xl hover:-translate-y-1 overflow-hidden">
-        
+
         {/* Modern Horizontal Bar at Bottom */}
         <div className="absolute bottom-0 left-0 right-0 h-[6px] bg-slate-50">
-          <div 
+          <div
             className={`h-full ${barColor} transition-all duration-1000 ease-out`}
             style={{ width: `${Math.min(100, percentRemaining)}%` }}
           />
@@ -54,11 +54,14 @@ const FridgeCard: React.FC<FridgeCardProps> = ({ item, onRemove, onMoveToList })
               </div>
             )}
           </div>
-          
+
           <div className="flex flex-col">
             <h3 className="font-extrabold text-slate-800 text-xl tracking-tight lowercase leading-none">
               {item.name}
             </h3>
+            <span className="text-[10px] font-bold text-slate-400 mt-1 uppercase tracking-wider">
+              Added: {new Date(item.addedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+            </span>
             <span className={`text-[9px] font-black mt-2 uppercase tracking-[0.2em] ${textColor}`}>
               {daysLeft <= 0 ? 'EXPIRED' : `${daysLeft}D REMAINING`}
             </span>

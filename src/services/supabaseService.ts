@@ -1,0 +1,101 @@
+import { createClient } from '@supabase/supabase-js';
+import { Database } from '../types/database.types';
+import { FridgeItem, ShoppingItem } from '../types';
+
+// These will be populated by the user in .env.local
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || '';
+const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_KEY || '';
+
+export const supabase = createClient<Database>(SUPABASE_URL, SUPABASE_KEY);
+
+export const supabaseService = {
+    // Subscribe to real-time changes for a specific household
+    subscribe: (householdId: string, onUpdate: () => void) => {
+        if (!householdId) return () => { };
+
+        const channel = supabase
+            .channel(`room:${householdId}`)
+            .on(
+                'postgres_changes',
+                { event: '*', schema: 'public', table: 'fridge_items', filter: `household_id=eq.${householdId}` },
+                () => onUpdate()
+            )
+            .on(
+                'postgres_changes',
+                { event: '*', schema: 'public', table: 'shopping_items', filter: `household_id=eq.${householdId}` },
+                () => onUpdate()
+            )
+            .subscribe();
+
+        return () => {
+            supabase.removeChannel(channel);
+        };
+    },
+
+    // Fetch all data for the household
+    fetchData: async (householdId: string) => {
+        if (!householdId) return { inventory: [], shoppingList: [] };
+
+        const [fridgeRes, shopRes] = await Promise.all([
+            supabase.from('fridge_items').select('*').eq('household_id', householdId),
+            supabase.from('shopping_items').select('*').eq('household_id', householdId)
+        ]);
+
+        if (fridgeRes.error?.code === 'PGRST205' || shopRes.error?.code === 'PGRST205') {
+            console.error("Supabase Error: Tables not found.");
+            alert("Setup Required: The database tables don't exist yet. Please run the SQL script in your Supabase Dashboard.");
+            return { inventory: [], shoppingList: [] };
+        }
+
+        // Map DB types back to App types
+        const inventory: FridgeItem[] = (fridgeRes.data || []).map(item => ({
+            id: item.id,
+            name: item.name,
+            category: item.category,
+            emoji: item.emoji,
+            quantity: item.quantity,
+            addedAt: item.added_at,
+            expiresAt: item.expires_at
+        }));
+
+        const shoppingList: ShoppingItem[] = (shopRes.data || []).map(item => ({
+            id: item.id,
+            name: item.name,
+            emoji: item.emoji
+        }));
+
+        return { inventory, shoppingList };
+    },
+
+    // --- Fridge Operations ---
+    addItem: async (item: FridgeItem, householdId: string) => {
+        await supabase.from('fridge_items').insert({
+            id: item.id,
+            household_id: householdId,
+            name: item.name,
+            category: item.category || 'Other',
+            emoji: item.emoji || '📦',
+            quantity: item.quantity || '',
+            added_at: item.addedAt,
+            expires_at: item.expiresAt
+        });
+    },
+
+    removeItem: async (itemId: string) => {
+        await supabase.from('fridge_items').delete().eq('id', itemId);
+    },
+
+    // --- Shopping List Operations ---
+    addShoppingItem: async (item: ShoppingItem, householdId: string) => {
+        await supabase.from('shopping_items').insert({
+            id: item.id,
+            household_id: householdId,
+            name: item.name,
+            emoji: item.emoji || '🛍️'
+        });
+    },
+
+    removeShoppingItem: async (itemId: string) => {
+        await supabase.from('shopping_items').delete().eq('id', itemId);
+    }
+};

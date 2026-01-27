@@ -6,7 +6,7 @@ export async function getFoodInfo(foodName: string): Promise<FoodInfoResponse> {
   const normalized = foodName.toLowerCase().trim();
   if (FALLBACK_FOOD_DATA[normalized]) return FALLBACK_FOOD_DATA[normalized];
 
-  const genAI = new GoogleGenerativeAI(process.env.API_KEY || '');
+  const genAI = new GoogleGenerativeAI(import.meta.env.VITE_API_KEY || '');
   try {
     const model = genAI.getGenerativeModel({
       model: "gemini-1.5-flash",
@@ -25,12 +25,18 @@ export async function getFoodInfo(foodName: string): Promise<FoodInfoResponse> {
     });
 
     const result = await model.generateContent(
-      `Provide grocery item info for "${foodName}". Include estimated days to expiry, category, and one emoji.`
+      `Provide groery item info for "${foodName}". 
+      - Category: MUST be one of ['Fruit', 'Vegetable', 'Dairy', 'Meat', 'Bakery'].
+      - If unsure (e.g. pantry items), pick the closest match (e.g. Bakery for bread/grains, Vegetable for plant-based).
+      - Days: estimated days to expiry.
+      - Emoji: one representative emoji.`
     );
     const text = result.response.text();
     return JSON.parse(text) as FoodInfoResponse;
   } catch (error) {
-    console.warn("Gemini AI error, using fallback:", error);
-    return { days: 5, category: "Grocery", emoji: "🍱" };
+    console.warn("Gemini AI error/fallback:", error);
+    // Defaulting to Vegetable is safer than Meat/Dairy, but might misclassify Fruits.
+    // Ideally user inputs specific category, but for now we fallback to Vegetable.
+    return { days: 7, category: "Vegetable", emoji: "🍱" };
   }
 }
