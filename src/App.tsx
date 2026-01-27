@@ -351,7 +351,7 @@ export default function App() {
               <div className="p-4 bg-indigo-50 rounded-2xl border border-indigo-100 mb-4">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-bold text-indigo-900">Get Notified?</span>
-                  <button onClick={requestNotifications} className="px-3 py-1.5 bg-indigo-600 text-white text-[10px] font-black uppercase rounded-lg shadow-sm active:scale-95">Enable</button>
+                  <button onClick={requestNotifications} className="px-5 py-2.5 bg-indigo-600 text-white text-[10px] font-black uppercase rounded-xl shadow-sm active:scale-95 transition-all">Enable</button>
                 </div>
                 <p className="text-[9px] text-indigo-400 mt-1 font-semibold">Get alerts for expiring food & new items.</p>
               </div>
