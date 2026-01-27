@@ -372,9 +372,7 @@ export default function App() {
             Go Back
           </button>
         </div>
-        </div>
-  )
-}
+      )}
 
       <main className="max-w-xl mx-auto px-6 -mt-10 space-y-12 relative z-20">
         <div className="bg-white p-2.5 pl-8 pr-2.5 rounded-[2.5rem] shadow-soft border border-slate-50 flex items-center gap-2 group transition-all focus-within:ring-4 focus-within:ring-brand-500/10">
