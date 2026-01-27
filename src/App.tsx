@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { FridgeItem, ShoppingItem } from './types';
 import { getFoodInfo } from './services/geminiService';
 import { supabaseService } from './services/supabaseService';
@@ -44,6 +44,7 @@ export default function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [copyFeedback, setCopyFeedback] = useState(false);
   const [synced, setSynced] = useState(false);
+  const lastActionTime = useRef(0); // To track local actions and avoid self-notifications
 
   // Initial Load & Real-time Sync
   useEffect(() => {
@@ -62,9 +63,24 @@ export default function App() {
       load();
 
       // 2. Subscribe to changes
-      const unsubscribe = supabaseService.subscribe(kitchenId, () => {
-        // Simple strategy: re-fetch on any change
-        load();
+      const unsubscribe = supabaseService.subscribe(kitchenId, (payload) => {
+        load(); // Always reload data
+
+        // Notification Logic
+        if (Date.now() - lastActionTime.current > 2000) { // Only notify if not a local action
+          if (Notification.permission === 'granted') {
+            const event = payload.eventType;
+            const table = payload.table; // 'fridge_items' or 'shopping_items'
+
+            if (event === 'INSERT') {
+              const name = payload.new.name;
+              new Notification(`New ${table === 'shopping_items' ? 'Shopping' : 'Fridge'} Item`, { body: `${name} was added to the list!` });
+            } else if (event === 'DELETE') {
+              // For deletes, we often only get ID, so a generic message is safer unless we cache names
+              new Notification('Item Removed', { body: `An item was checked off or removed.` });
+            }
+          }
+        }
       });
 
       // Cleanup
@@ -75,7 +91,41 @@ export default function App() {
     }
   }, [kitchenId, view]);
 
+  // Expiry Check Effect
+  useEffect(() => {
+    if (inventory.length === 0) return;
+
+    // Check if we already notified today to avoid spam
+    const lastAlert = localStorage.getItem('last_expiry_alert');
+    const today = new Date().toDateString();
+
+    if (lastAlert !== today && Notification.permission === 'granted') {
+      const expiringSoon = inventory.filter(item => {
+        const daysLeft = Math.ceil((item.expiresAt - Date.now()) / (1000 * 60 * 60 * 24));
+        return daysLeft <= 3 && daysLeft > 0;
+      });
+
+      if (expiringSoon.length > 0) {
+        new Notification('⚠️ Fridge Alert', {
+          body: `${expiringSoon.length} items are expiring within 3 days! Use them up!`
+        });
+        localStorage.setItem('last_expiry_alert', today);
+      }
+    }
+  }, [inventory]);
+
   // Removed the useEffect that saves to localStorage - we save to Cloud now!
+
+  const requestNotifications = async () => {
+    if (!('Notification' in window)) {
+      alert("This browser does not support desktop notifications");
+      return;
+    }
+    const permission = await Notification.requestPermission();
+    if (permission === 'granted') {
+      new Notification("Notifications Enabled!", { body: "You will now see updates from your household." });
+    }
+  };
 
   const handleStart = (e: React.FormEvent) => {
     e.preventDefault();
@@ -139,6 +189,7 @@ export default function App() {
 
   const removeItem = async (id: string) => {
     setInventory(prev => prev.filter(x => x.id !== id)); // Optimistic
+    lastActionTime.current = Date.now();
     await supabaseService.removeItem(id);
   };
 
@@ -158,6 +209,7 @@ export default function App() {
 
   const removeFromShoppingList = async (id: string) => {
     setShoppingList(prev => prev.filter(x => x.id !== id)); // Optimistic
+    lastActionTime.current = Date.now();
     await supabaseService.removeShoppingItem(id);
   };
 
@@ -199,6 +251,7 @@ export default function App() {
       setShoppingList(prev => prev.map(x => x.id === tempId ? item : x));
 
       // 4. Persist to DB
+      lastActionTime.current = Date.now();
       await supabaseService.addShoppingItem(item, kitchenId);
     } catch (err) {
       console.error(err);
@@ -209,6 +262,7 @@ export default function App() {
         emoji: '🛍️'
       };
       setShoppingList(prev => prev.map(x => x.id === tempId ? fallbackItem : x));
+      lastActionTime.current = Date.now();
       await supabaseService.addShoppingItem(fallbackItem, kitchenId);
     }
   };
@@ -305,23 +359,33 @@ export default function App() {
                 </div>
               </div>
 
-              <button
-                onClick={handleLogout}
-                className="w-full py-5 bg-rose-50/50 text-rose-500 font-black rounded-3xl hover:bg-rose-100/50 active:scale-[0.98] transition-all text-sm tracking-wide"
-              >
-                Step out of this Kitchen
-              </button>
+              <div className="p-4 bg-indigo-50 rounded-2xl border border-indigo-100 mb-4">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-indigo-900">Get Notified?</span>
+                  <button onClick={requestNotifications} className="px-3 py-1.5 bg-indigo-600 text-white text-[10px] font-black uppercase rounded-lg shadow-sm active:scale-95">Enable</button>
+                </div>
+                <p className="text-[9px] text-indigo-400 mt-1 font-semibold">Get alerts for expiring food & new items.</p>
+              </div>
             </div>
 
             <button
-              onClick={() => setIsSettingsOpen(false)}
-              className="w-full py-4 text-slate-300 hover:text-slate-500 font-black text-[11px] uppercase tracking-[0.3em] transition-colors"
+              onClick={handleLogout}
+              className="w-full py-5 bg-rose-50/50 text-rose-500 font-black rounded-3xl hover:bg-rose-100/50 active:scale-[0.98] transition-all text-sm tracking-wide"
             >
-              Go Back
+              Step out of this Kitchen
             </button>
           </div>
+
+          <button
+            onClick={() => setIsSettingsOpen(false)}
+            className="w-full py-4 text-slate-300 hover:text-slate-500 font-black text-[11px] uppercase tracking-[0.3em] transition-colors"
+          >
+            Go Back
+          </button>
         </div>
-      )}
+        </div>
+  )
+}
 
       <main className="max-w-xl mx-auto px-6 -mt-10 space-y-12 relative z-20">
         <div className="bg-white p-2.5 pl-8 pr-2.5 rounded-[2.5rem] shadow-soft border border-slate-50 flex items-center gap-2 group transition-all focus-within:ring-4 focus-within:ring-brand-500/10">
@@ -404,6 +468,6 @@ export default function App() {
         </div>
       </main>
       <BackgroundIcons />
-    </div>
+    </div >
   );
 }

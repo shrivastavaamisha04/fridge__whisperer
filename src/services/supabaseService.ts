@@ -10,7 +10,7 @@ export const supabase = createClient<Database>(SUPABASE_URL, SUPABASE_KEY);
 
 export const supabaseService = {
     // Subscribe to real-time changes for a specific household
-    subscribe: (householdId: string, onUpdate: () => void) => {
+    subscribe: (householdId: string, onUpdate: (payload: any) => void) => {
         if (!householdId) return () => { };
 
         const channel = supabase
@@ -18,12 +18,12 @@ export const supabaseService = {
             .on(
                 'postgres_changes',
                 { event: '*', schema: 'public', table: 'fridge_items', filter: `household_id=eq.${householdId}` },
-                () => onUpdate()
+                (payload) => onUpdate(payload)
             )
             .on(
                 'postgres_changes',
                 { event: '*', schema: 'public', table: 'shopping_items', filter: `household_id=eq.${householdId}` },
-                () => onUpdate()
+                (payload) => onUpdate(payload)
             )
             .subscribe();
 
