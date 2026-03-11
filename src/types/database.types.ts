@@ -61,6 +61,23 @@ export interface Database {
                     emoji?: string
                 }
             }
+            household_members: {
+                Row: {
+                    household_id: string
+                    user_name: string
+                    joined_at: number
+                }
+                Insert: {
+                    household_id: string
+                    user_name: string
+                    joined_at: number
+                }
+                Update: {
+                    household_id?: string
+                    user_name?: string
+                    joined_at?: number
+                }
+            }
         }
     }
 }

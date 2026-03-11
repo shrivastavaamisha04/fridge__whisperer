@@ -50,6 +50,7 @@ export default function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [copyFeedback, setCopyFeedback] = useState(false);
   const [synced, setSynced] = useState(false);
+  const [householdMembers, setHouseholdMembers] = useState<string[]>([]);
   // Guide: auto-open on ?guide=true URL, or first visit (pill shown until dismissed)
   const [showGuide, setShowGuide] = useState(() =>
     new URLSearchParams(window.location.search).get('guide') === 'true'
@@ -143,7 +144,9 @@ export default function App() {
   const handleStart = (e: React.FormEvent) => {
     e.preventDefault();
     if (userName.trim()) {
-      if (!kitchenId.trim()) setKitchenId('HOME-' + Math.random().toString(36).substr(2, 5).toUpperCase());
+      const resolvedId = kitchenId.trim() || 'HOME-' + Math.random().toString(36).substr(2, 5).toUpperCase();
+      if (!kitchenId.trim()) setKitchenId(resolvedId);
+      supabaseService.upsertMember(resolvedId, userName.trim());
       setView('dashboard');
     }
   };
@@ -358,7 +361,7 @@ export default function App() {
             </p>
           </div>
           <button
-            onClick={() => setIsSettingsOpen(true)}
+            onClick={() => { setIsSettingsOpen(true); supabaseService.fetchMembers(kitchenId).then(setHouseholdMembers); }}
             className="w-11 h-11 bg-white/20 hover:bg-white/30 rounded-2xl flex items-center justify-center transition-all backdrop-blur-md border border-white/20 shadow-lg flex-shrink-0"
           >
             <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -420,6 +423,19 @@ export default function App() {
                 )}
               </div>
 
+              {/* Household members */}
+              {householdMembers.length > 0 && (
+                <div className="px-4 py-3 bg-slate-50/80 rounded-2xl border border-slate-100">
+                  <span className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] block mb-1.5">
+                    Members
+                  </span>
+                  <p className="text-xs font-bold text-slate-700">
+                    {householdMembers.length} {householdMembers.length === 1 ? 'person' : 'people'}{' '}
+                    <span className="font-normal text-slate-400">({householdMembers.join(', ')})</span>
+                  </p>
+                </div>
+              )}
+
               {/* Household key + share */}
               <div className="p-5 bg-slate-50/80 rounded-2xl border border-slate-100 flex flex-col gap-3">
                 <span className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] block">
@@ -475,7 +491,7 @@ export default function App() {
                     </button>
                   )}
                 </div>
-                <p className={`text-[9px] mt-1 font-semibold ${notifPermission === 'granted' ? 'text-emerald-500' : notifPermission === 'denied' ? 'text-slate-400' : 'text-indigo-400'}`}>
+                <p className={`text-[9px] mt-1 font-semibold italic ${notifPermission === 'granted' ? 'text-emerald-500' : notifPermission === 'denied' ? 'text-slate-400' : 'text-indigo-400'}`}>
                   {notifPermission === 'granted'
                     ? "You'll be alerted for expiring food & household updates."
                     : notifPermission === 'denied'

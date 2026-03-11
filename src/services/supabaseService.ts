@@ -106,5 +106,25 @@ export const supabaseService = {
     removeShoppingItem: async (itemId: string) => {
         const { error } = await supabase.from('shopping_items').delete().eq('id', itemId);
         if (error) throw new Error(error.message);
+    },
+
+    // --- Household Members ---
+    upsertMember: async (householdId: string, userName: string) => {
+        const { error } = await supabase.from('household_members').upsert({
+            household_id: householdId,
+            user_name: userName,
+            joined_at: Date.now()
+        }, { onConflict: 'household_id,user_name' });
+        if (error) console.error('Failed to upsert member:', error.message);
+    },
+
+    fetchMembers: async (householdId: string): Promise<string[]> => {
+        const { data, error } = await supabase
+            .from('household_members')
+            .select('user_name')
+            .eq('household_id', householdId)
+            .order('joined_at', { ascending: true });
+        if (error) { console.error('Failed to fetch members:', error.message); return []; }
+        return (data || []).map(r => r.user_name);
     }
 };
