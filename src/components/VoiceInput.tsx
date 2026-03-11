@@ -65,6 +65,12 @@ export default function VoiceInput({ onTranscript, disabled }: VoiceInputProps) 
 
   // ── Web Speech API (primary — real-time) ─────────────────────────────────
   const startWithSpeechAPI = useCallback(() => {
+    // Force-kill any lingering recognition before starting fresh
+    if (recognitionRef.current) {
+      try { recognitionRef.current.abort(); } catch {}
+      recognitionRef.current = null;
+    }
+
     const recognition = new SpeechRecognitionAPI();
     recognitionRef.current = recognition;
 
