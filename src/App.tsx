@@ -4,6 +4,7 @@ import { getFoodInfo } from './services/geminiService';
 import { supabaseService } from './services/supabaseService';
 import FridgeCard from './components/FridgeCard';
 import VoiceInput from './components/VoiceInput';
+import HowToUse from './components/HowToUse';
 
 const StrawberryWallpaper = () => (
   <div
@@ -34,7 +35,7 @@ export default function App() {
   );
   const [kitchenId, setKitchenId] = useState(() => localStorage.getItem('kitchen_id') || '');
   const [userName, setUserName] = useState(() => localStorage.getItem('user_name') || '');
-  const [householdName, setHouseholdName] = useState(() => localStorage.getItem('household_name') || 'Our Kitchen');
+  const [householdName, setHouseholdName] = useState(() => localStorage.getItem('household_name') || 'My Kitchen');
   const [editingHouseholdName, setEditingHouseholdName] = useState(false);
   const [householdNameInput, setHouseholdNameInput] = useState('');
   const householdNameInputRef = useRef<HTMLInputElement>(null);
@@ -49,6 +50,16 @@ export default function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [copyFeedback, setCopyFeedback] = useState(false);
   const [synced, setSynced] = useState(false);
+  // Guide: auto-open on ?guide=true URL, or first visit (pill shown until dismissed)
+  const [showGuide, setShowGuide] = useState(() =>
+    new URLSearchParams(window.location.search).get('guide') === 'true'
+  );
+  const [guideSeen, setGuideSeen] = useState(() =>
+    localStorage.getItem('guide_seen') === 'true'
+  );
+  const [notifPermission, setNotifPermission] = useState<NotificationPermission>(
+    typeof Notification !== 'undefined' ? Notification.permission : 'default'
+  );
   const lastActionTime = useRef(0);
 
   // ── Supabase: Initial Load & Real-time Sync ───────────────────────────────
@@ -121,6 +132,7 @@ export default function App() {
       return;
     }
     const permission = await Notification.requestPermission();
+    setNotifPermission(permission);
     if (permission === 'granted') {
       new Notification('Notifications Enabled!', { body: 'You will now see updates from your household.' });
     }
@@ -138,6 +150,10 @@ export default function App() {
     if (confirm('Step out of this kitchen? Your household will miss you, but the data stays safe.')) {
       localStorage.removeItem('kitchen_id');
       localStorage.removeItem('user_name');
+      localStorage.removeItem('household_name');
+      localStorage.removeItem('guide_seen');
+      setHouseholdName('My Kitchen');
+      setGuideSeen(false);
       setView('landing');
       setInventory([]);
       setShoppingList([]);
@@ -151,9 +167,12 @@ export default function App() {
     setTimeout(() => setCopyFeedback(false), 2000);
   };
 
+  const openGuide = () => { setShowGuide(true); setGuideSeen(true); localStorage.setItem('guide_seen', 'true'); };
+  const closeGuide = () => { setShowGuide(false); setGuideSeen(true); localStorage.setItem('guide_seen', 'true'); };
+
   // ── WhatsApp share ────────────────────────────────────────────────────────
   const shareOnWhatsApp = () => {
-    const msg = `Hey! Join our household on Fridge Whisperer!\n\nHousehold: ${householdName}\nKey: ${kitchenId}\n\nOpen the app, enter this key and you're in:\nhttps://fridge-whisperer.vercel.app/`;
+    const msg = `Hey! Join our household on Fridge Whisperer!\n\nHousehold: ${householdName}\nKey: ${kitchenId}\n\nOpen the app, enter this key and you're in:\nhttps://fridge-whisperer.vercel.app/\n\nNew to the app? Step-by-step guide:\nhttps://fridge-whisperer.vercel.app/?guide=true`;
     window.open(`https://wa.me/?text=${encodeURIComponent(msg)}`, '_blank');
   };
 
@@ -426,20 +445,47 @@ export default function App() {
               </div>
 
               {/* Notifications */}
-              <div className="p-4 bg-indigo-50 rounded-2xl border border-indigo-100">
+              <div className={`p-4 rounded-2xl border transition-all ${notifPermission === 'granted' ? 'bg-emerald-50 border-emerald-100' : 'bg-indigo-50 border-indigo-100'}`}>
                 <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-indigo-900">Get Notified?</span>
-                  <button
-                    onClick={requestNotifications}
-                    className="px-4 py-2 bg-indigo-600 text-white text-[10px] font-black uppercase rounded-xl shadow-sm active:scale-95 transition-all"
-                  >
-                    Enable
-                  </button>
+                  <span className={`text-xs font-bold ${notifPermission === 'granted' ? 'text-emerald-900' : 'text-indigo-900'}`}>
+                    {notifPermission === 'granted' ? 'Notifications On' : 'Get Notified?'}
+                  </span>
+                  {notifPermission === 'granted' ? (
+                    <span className="flex items-center gap-1.5 px-3 py-2 bg-emerald-500 text-white text-[10px] font-black uppercase rounded-xl">
+                      <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round"><path d="M20 6L9 17l-5-5"/></svg>
+                      Enabled
+                    </span>
+                  ) : notifPermission === 'denied' ? (
+                    <span className="px-3 py-2 bg-slate-200 text-slate-500 text-[10px] font-black uppercase rounded-xl">
+                      Blocked
+                    </span>
+                  ) : (
+                    <button
+                      onClick={requestNotifications}
+                      className="px-4 py-2 bg-indigo-600 text-white text-[10px] font-black uppercase rounded-xl shadow-sm active:scale-95 transition-all"
+                    >
+                      Enable
+                    </button>
+                  )}
                 </div>
-                <p className="text-[9px] text-indigo-400 mt-1 font-semibold">
-                  Get alerts for expiring food & new items.
+                <p className={`text-[9px] mt-1 font-semibold ${notifPermission === 'granted' ? 'text-emerald-500' : notifPermission === 'denied' ? 'text-slate-400' : 'text-indigo-400'}`}>
+                  {notifPermission === 'granted'
+                    ? "You'll be alerted for expiring food & household updates."
+                    : notifPermission === 'denied'
+                    ? 'Notifications blocked in browser settings.'
+                    : 'Get alerts for expiring food & new items.'}
                 </p>
               </div>
+
+              <button
+                onClick={() => { setIsSettingsOpen(false); openGuide(); }}
+                className="w-full py-4 bg-slate-50 text-slate-500 font-black rounded-2xl active:scale-[0.98] transition-all text-sm flex items-center justify-center gap-2"
+              >
+                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="12" cy="12" r="10" /><line x1="12" y1="16" x2="12" y2="12" /><line x1="12" y1="8" x2="12.01" y2="8" />
+                </svg>
+                How to use
+              </button>
 
               <button
                 onClick={handleLogout}
@@ -571,6 +617,32 @@ export default function App() {
           </div>
         </div>
       </main>
+
+      {/* First-visit how-to pill — shown until dismissed */}
+      {!guideSeen && !showGuide && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[150] animate-in fade-in slide-in-from-bottom-3 duration-500">
+          <div className="flex items-center gap-2 bg-slate-900/90 backdrop-blur-md text-white pl-3 pr-1.5 py-1.5 rounded-full shadow-2xl">
+            <span className="text-xs font-semibold whitespace-nowrap text-white/80">New here?</span>
+            <button
+              onClick={openGuide}
+              className="px-3 py-1 bg-brand-500 text-white text-xs font-bold rounded-full whitespace-nowrap active:scale-95 transition-all"
+            >
+              How to use
+            </button>
+            <button
+              onClick={closeGuide}
+              className="w-5 h-5 flex items-center justify-center rounded-full hover:bg-white/10 text-white/40 transition-all flex-shrink-0"
+            >
+              <svg className="w-2.5 h-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round">
+                <path d="M18 6L6 18M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* How to use modal */}
+      {showGuide && <HowToUse onClose={closeGuide} />}
 
       <BackgroundIcons />
     </div>
