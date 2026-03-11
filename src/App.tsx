@@ -294,11 +294,14 @@ export default function App() {
     setLoading(true);
     try {
       for (const p of items) {
+        // Strip trailing punctuation (Devanagari danda etc.) from names
+        const cleanedName = p.name.replace(/[।.!?،؟]+$/, '').trim();
+        const cleanedLocal = p.localName ? p.localName.replace(/[।.!?،؟]+$/, '').trim() : undefined;
         const item: FridgeItem = {
           id: crypto.randomUUID(),
-          name: p.name,
-          localName: p.localName,
-          localLang: p.localLang,
+          name: cleanedName,
+          localName: cleanedLocal !== cleanedName ? cleanedLocal : undefined,
+          localLang: (cleanedLocal && cleanedLocal !== cleanedName) ? p.localLang : undefined,
           category: p.category || 'Other',
           emoji: p.emoji,
           addedAt: Date.now(),

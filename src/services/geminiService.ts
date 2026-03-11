@@ -11,62 +11,59 @@ export interface ParsedItem {
   quantity: string;     // e.g. "1 kg", "500 gm"
 }
 
+// Strip trailing punctuation from a food name (danda, period, etc.)
+function cleanName(s: string): string {
+  return s.trim().replace(/[।.!?،؟]+$/, '').trim();
+}
+
 // Parse a multi-item voice transcript into individual fridge items
 export async function parseItemList(transcript: string, langCode: string): Promise<ParsedItem[]> {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   try {
+    // Use plain JSON mode (no responseSchema) — array schemas can cause silent failures
     const response = await ai.models.generateContent({
       model: "gemini-2.0-flash",
       contents: `You are a kitchen assistant for an Indian household app. The user spoke in language code "${langCode}".
 Voice transcript: "${transcript}"
 
-Extract EACH food/grocery item mentioned. For each:
-- name: English normalised name (e.g. "Milk", "Tomatoes")
-- localName: exact name as spoken — preserve original script/language if non-English (e.g. "दूध", "টমেটো"). If already English, same as name.
-- emoji: single most relevant food emoji
-- category: one of [Fruit, Vegetable, Dairy, Meat, Bakery, Pantry, Other]
-- shelfLifeDays: realistic days fresh in fridge
-- quantity: extract from speech in ANY language and normalise:
-  "ek kilo"/"एक किलो"/"এক কেজি" → "1 kg"
-  "do kilo"/"দুই কেজি" → "2 kg"
-  "paanch sau gram"/"পাঁচশো গ্রাম" → "500 gm"
-  "ek litre"/"এক লিটার" → "1 litre"
-  If no quantity mentioned → "500 gm"
+Extract EACH food/grocery item mentioned and return a JSON array. For each item:
+- "name": English normalised name (e.g. "Milk", "Carrot", "Tomatoes")
+- "localName": exact name as spoken — preserve original script if non-English (e.g. "दूध", "গাজর"). If already English, same as name.
+- "emoji": single most relevant food emoji
+- "category": one of Fruit, Vegetable, Dairy, Meat, Bakery, Pantry, Other
+- "shelfLifeDays": realistic integer days fresh in fridge
+- "quantity": normalise from any language — "ek kilo"/"एक किलो" → "1 kg", "paanch sau gram" → "500 gm", default "500 gm"
 
-Return ONLY a valid JSON array, no markdown.`,
+Return ONLY the raw JSON array with no markdown fences. Example: [{"name":"Carrot","localName":"गाजर","emoji":"🥕","category":"Vegetable","shelfLifeDays":21,"quantity":"500 gm"}]`,
       config: {
         responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.ARRAY,
-          items: {
-            type: Type.OBJECT,
-            properties: {
-              name:          { type: Type.STRING },
-              localName:     { type: Type.STRING },
-              emoji:         { type: Type.STRING },
-              category:      { type: Type.STRING },
-              shelfLifeDays: { type: Type.INTEGER },
-              quantity:      { type: Type.STRING },
-            },
-            required: ["name", "localName", "emoji", "category", "shelfLifeDays", "quantity"],
-          },
-        },
       },
     });
-    const text = response.text || "[]";
-    const parsed = JSON.parse(text) as ParsedItem[];
-    return parsed.length > 0 ? parsed : [];
+    const text = (response.text || "").trim();
+    // Strip any accidental markdown fences
+    const json = text.replace(/^```[a-z]*\n?/i, '').replace(/\n?```$/i, '').trim();
+    const parsed = JSON.parse(json) as ParsedItem[];
+    return Array.isArray(parsed) && parsed.length > 0 ? parsed : [];
   } catch (error) {
-    console.warn("parseItemList error, falling back:", error);
-    const info = await getFoodInfo(transcript);
-    return [{
-      name: transcript.trim(),
-      localName: transcript.trim(),
-      emoji: info.emoji,
-      category: info.category,
-      shelfLifeDays: info.days,
-      quantity: "500 gm",
-    }];
+    console.error("parseItemList error:", error);
+    // Fallback: split by commas / semicolons / Hindi conjunctions / Devanagari danda
+    const parts = transcript
+      .split(/[,;।\n]|\s+और\s+|\s+aur\s+|\s+and\s+/i)
+      .map(cleanName)
+      .filter(Boolean);
+    const segments = parts.length > 0 ? parts : [cleanName(transcript)];
+    return Promise.all(segments.map(async part => {
+      const info = await getFoodInfo(part);
+      const isNonEnglish = /[^\x00-\x7F]/.test(part);
+      return {
+        name: part,          // will be corrected in confirmAddToFridge if non-English
+        localName: isNonEnglish ? part : part,
+        emoji: info.emoji,
+        category: info.category,
+        shelfLifeDays: info.days,
+        quantity: "500 gm",
+      };
+    }));
   }
 }
 
@@ -79,31 +76,27 @@ export async function parseShoppingItems(transcript: string, langCode: string): 
       contents: `You are a kitchen assistant for an Indian household. The user spoke in language code "${langCode}".
 Voice transcript: "${transcript}"
 
-Extract EACH grocery/shopping item mentioned. For each:
-- name: English normalised name
-- emoji: single most relevant emoji
+Extract EACH grocery/shopping item mentioned and return a JSON array. For each:
+- "name": English normalised name
+- "emoji": single most relevant emoji
 
-Return ONLY a valid JSON array, no markdown.`,
+Return ONLY the raw JSON array, no markdown. Example: [{"name":"Onion","emoji":"🧅"},{"name":"Tomato","emoji":"🍅"}]`,
       config: {
         responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.ARRAY,
-          items: {
-            type: Type.OBJECT,
-            properties: {
-              name:  { type: Type.STRING },
-              emoji: { type: Type.STRING },
-            },
-            required: ["name", "emoji"],
-          },
-        },
       },
     });
-    const text = response.text || "[]";
-    return JSON.parse(text) as Array<{ name: string; emoji: string }>;
+    const text = (response.text || "").trim();
+    const json = text.replace(/^```[a-z]*\n?/i, '').replace(/\n?```$/i, '').trim();
+    const parsed = JSON.parse(json) as Array<{ name: string; emoji: string }>;
+    return Array.isArray(parsed) && parsed.length > 0 ? parsed : [];
   } catch (error) {
-    console.warn("parseShoppingItems error:", error);
-    return [{ name: transcript.trim(), emoji: "🛍️" }];
+    console.error("parseShoppingItems error:", error);
+    // Fallback: split by commas
+    const parts = transcript
+      .split(/[,;।\n]|\s+और\s+|\s+aur\s+|\s+and\s+/i)
+      .map(cleanName)
+      .filter(Boolean);
+    return (parts.length > 0 ? parts : [cleanName(transcript)]).map(p => ({ name: p, emoji: "🛍️" }));
   }
 }
 
