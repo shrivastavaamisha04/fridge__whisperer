@@ -21,10 +21,12 @@ async function translateToEnglish(ai: GoogleGenAI, localWord: string): Promise<s
   try {
     const resp = await ai.models.generateContent({
       model: "gemini-2.0-flash",
-      contents: `What is the standard English name for this food item: "${localWord}"? Reply with ONLY the English food name, one or two words maximum, nothing else. Example: if input is "दूध", reply "Milk". If input is "टमाटर", reply "Tomato".`,
+      contents: `Translate this food item to English. Reply with ONLY 1-3 English words, no punctuation, no explanation. Input: "${localWord}"`,
     });
-    const eng = (resp.text || '').trim().replace(/["""]/g, '').trim();
-    return eng || localWord;
+    const raw = (resp.text || '').trim().replace(/["""'.,!?]/g, '').trim();
+    // Only accept if response starts with a Latin letter (guards against Hindi/etc. slipping through)
+    const match = raw.match(/^[A-Za-z][A-Za-z\s]{0,40}/);
+    return match ? match[0].trim() : localWord;
   } catch {
     return localWord;
   }

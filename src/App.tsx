@@ -74,7 +74,8 @@ export default function App() {
   const [notifPermission, setNotifPermission] = useState<NotificationPermission>(
     typeof Notification !== 'undefined' ? Notification.permission : 'default'
   );
-  const lastActionTime = useRef(0);
+  // Track IDs of items we inserted ourselves — suppress their realtime notifications
+  const selfInsertedIds = useRef(new Set<string>());
 
   // ── Supabase: Initial Load & Real-time Sync ───────────────────────────────
   useEffect(() => {
@@ -93,20 +94,24 @@ export default function App() {
 
       const unsubscribe = supabaseService.subscribe(kitchenId, (payload) => {
         load();
-        if (Date.now() - lastActionTime.current > 2000) {
-          if (Notification.permission === 'granted') {
-            const event = payload.eventType;
-            const table = payload.table;
-            if (event === 'INSERT') {
-              const name = payload.new.name;
-              const emoji = payload.new.emoji || '';
-              const isShoppingItem = table === 'shopping_items';
-              new Notification(`${emoji} ${name}`, {
-                body: isShoppingItem ? 'Added to shopping list' : 'Added to fridge'
-              });
-            } else if (event === 'DELETE') {
-              new Notification('List updated', { body: 'Your household made a change' });
-            }
+        if (Notification.permission === 'granted') {
+          const event = payload.eventType;
+          const insertedId = payload.new?.id as string | undefined;
+          // Suppress notification for items we inserted ourselves
+          if (event === 'INSERT' && insertedId && selfInsertedIds.current.has(insertedId)) {
+            selfInsertedIds.current.delete(insertedId);
+            return;
+          }
+          const table = payload.table;
+          if (event === 'INSERT') {
+            const name = payload.new.name;
+            const emoji = payload.new.emoji || '';
+            const isShoppingItem = table === 'shopping_items';
+            new Notification(`${emoji} ${name}`, {
+              body: isShoppingItem ? 'Added to shopping list' : 'Added to fridge'
+            });
+          } else if (event === 'DELETE') {
+            new Notification('List updated', { body: 'Your household made a change' });
           }
         }
       });
@@ -225,7 +230,7 @@ export default function App() {
       };
       setInventory(prev => [item!, ...prev]);
       setNewItem('');
-      lastActionTime.current = Date.now();
+      selfInsertedIds.current.add(item.id);
       await supabaseService.addItem(item, kitchenId);
       if (sourceId) {
         setShoppingList(prev => prev.filter(x => x.id !== sourceId));
@@ -309,7 +314,7 @@ export default function App() {
           quantity: p.quantity || itemQuantity,
         };
         setInventory(prev => [item, ...prev]);
-        lastActionTime.current = Date.now();
+        selfInsertedIds.current.add(item.id);
         await supabaseService.addItem(item, kitchenId);
       }
     } catch (err) {
@@ -327,7 +332,7 @@ export default function App() {
       for (const p of items) {
         const item: ShoppingItem = { id: crypto.randomUUID(), name: p.name, emoji: p.emoji || '🛍️' };
         setShoppingList(prev => [...prev, item]);
-        lastActionTime.current = Date.now();
+        selfInsertedIds.current.add(item.id);
         await supabaseService.addShoppingItem(item, kitchenId);
       }
     } catch (err) {
@@ -338,19 +343,16 @@ export default function App() {
   // ── Update quantity on an existing fridge item ────────────────────────────
   const updateQuantity = useCallback(async (itemId: string, quantity: string) => {
     setInventory(prev => prev.map(x => x.id === itemId ? { ...x, quantity } : x));
-    lastActionTime.current = Date.now();
     await supabaseService.updateItemQuantity(itemId, quantity);
   }, []);
 
   const removeItem = async (id: string) => {
     setInventory(prev => prev.filter(x => x.id !== id)); // optimistic
-    lastActionTime.current = Date.now();
     await supabaseService.removeItem(id);
   };
 
   const removeFromShoppingList = async (id: string) => {
     setShoppingList(prev => prev.filter(x => x.id !== id)); // optimistic
-    lastActionTime.current = Date.now();
     await supabaseService.removeShoppingItem(id);
   };
 
@@ -365,12 +367,12 @@ export default function App() {
       const info = await getFoodInfo(name);
       const item: ShoppingItem = { id: tempId, name, emoji: info.emoji || '🛍️' };
       setShoppingList(prev => prev.map(x => x.id === tempId ? item : x));
-      lastActionTime.current = Date.now(); // suppress self-notification
+      selfInsertedIds.current.add(tempId);
       await supabaseService.addShoppingItem(item, kitchenId);
     } catch {
       const fallback: ShoppingItem = { id: tempId, name, emoji: '🛍️' };
       setShoppingList(prev => prev.map(x => x.id === tempId ? fallback : x));
-      lastActionTime.current = Date.now();
+      selfInsertedIds.current.add(tempId);
       await supabaseService.addShoppingItem(fallback, kitchenId);
     }
   };
@@ -703,7 +705,7 @@ export default function App() {
                     onMoveToList={async (i) => {
                       setShoppingList(prev => [...prev, { id: i.id, name: i.name, emoji: i.emoji }]);
                       setInventory(prev => prev.filter(x => x.id !== i.id));
-                      lastActionTime.current = Date.now();
+                      selfInsertedIds.current.add(i.id);
                       await supabaseService.addShoppingItem({ id: i.id, name: i.name, emoji: i.emoji }, kitchenId);
                       await supabaseService.removeItem(i.id);
                     }}
