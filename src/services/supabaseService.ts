@@ -41,9 +41,14 @@ export const supabaseService = {
             supabase.from('shopping_items').select('*').eq('household_id', householdId)
         ]);
 
-        if (fridgeRes.error?.code === 'PGRST205' || shopRes.error?.code === 'PGRST205') {
-            console.error("Supabase Error: Tables not found.");
-            alert("Setup Required: The database tables don't exist yet. Please run the SQL script in your Supabase Dashboard.");
+        if (fridgeRes.error || shopRes.error) {
+            const err = fridgeRes.error || shopRes.error;
+            console.error("Supabase fetchData error:", err);
+            if (err?.code === 'PGRST205') {
+                alert("Setup Required: The database tables don't exist yet.");
+            } else {
+                alert(`Failed to load data: ${err?.message}`);
+            }
             return { inventory: [], shoppingList: [] };
         }
 
@@ -69,7 +74,7 @@ export const supabaseService = {
 
     // --- Fridge Operations ---
     addItem: async (item: FridgeItem, householdId: string) => {
-        await supabase.from('fridge_items').insert({
+        const { error } = await supabase.from('fridge_items').insert({
             id: item.id,
             household_id: householdId,
             name: item.name,
@@ -79,23 +84,27 @@ export const supabaseService = {
             added_at: item.addedAt,
             expires_at: item.expiresAt
         });
+        if (error) throw new Error(error.message);
     },
 
     removeItem: async (itemId: string) => {
-        await supabase.from('fridge_items').delete().eq('id', itemId);
+        const { error } = await supabase.from('fridge_items').delete().eq('id', itemId);
+        if (error) throw new Error(error.message);
     },
 
     // --- Shopping List Operations ---
     addShoppingItem: async (item: ShoppingItem, householdId: string) => {
-        await supabase.from('shopping_items').insert({
+        const { error } = await supabase.from('shopping_items').insert({
             id: item.id,
             household_id: householdId,
             name: item.name,
             emoji: item.emoji || '🛍️'
         });
+        if (error) throw new Error(error.message);
     },
 
     removeShoppingItem: async (itemId: string) => {
-        await supabase.from('shopping_items').delete().eq('id', itemId);
+        const { error } = await supabase.from('shopping_items').delete().eq('id', itemId);
+        if (error) throw new Error(error.message);
     }
 };

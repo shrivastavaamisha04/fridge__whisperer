@@ -85,11 +85,13 @@ export default function App() {
             const table = payload.table;
             if (event === 'INSERT') {
               const name = payload.new.name;
-              new Notification(`New ${table === 'shopping_items' ? 'Shopping' : 'Fridge'} Item`, {
-                body: `${name} was added to the list!`
+              const emoji = payload.new.emoji || '';
+              const isShoppingItem = table === 'shopping_items';
+              new Notification(`${emoji} ${name}`, {
+                body: isShoppingItem ? 'Added to shopping list' : 'Added to fridge'
               });
             } else if (event === 'DELETE') {
-              new Notification('Item Removed', { body: 'An item was checked off or removed.' });
+              new Notification('List updated', { body: 'Your household made a change' });
             }
           }
         }
@@ -193,9 +195,10 @@ export default function App() {
   const addItemToFridge = async (name: string, sourceId?: string) => {
     if (!name.trim() || loading) return;
     setLoading(true);
+    let item: FridgeItem | null = null;
     try {
       const info = await getFoodInfo(name);
-      const item: FridgeItem = {
+      item = {
         id: crypto.randomUUID(),
         name: name.trim(),
         category: info.category,
@@ -204,15 +207,19 @@ export default function App() {
         expiresAt: Date.now() + (info.days * 86400000),
         quantity: itemQuantity,
       };
-      setInventory(prev => [item, ...prev]); // optimistic
+      setInventory(prev => [item!, ...prev]); // optimistic
       setNewItem('');
+      lastActionTime.current = Date.now(); // suppress self-notification
       await supabaseService.addItem(item, kitchenId);
       if (sourceId) {
         setShoppingList(prev => prev.filter(x => x.id !== sourceId));
         await supabaseService.removeShoppingItem(sourceId);
       }
     } catch (err) {
-      console.error(err);
+      console.error('Failed to save item:', err);
+      // Roll back optimistic update if DB save failed
+      if (item) setInventory(prev => prev.filter(x => x.id !== item!.id));
+      alert('Could not save item — check your internet connection or Supabase setup.');
     } finally {
       setLoading(false);
     }
@@ -241,7 +248,7 @@ export default function App() {
       const info = await getFoodInfo(name);
       const item: ShoppingItem = { id: tempId, name, emoji: info.emoji || '🛍️' };
       setShoppingList(prev => prev.map(x => x.id === tempId ? item : x));
-      lastActionTime.current = Date.now();
+      lastActionTime.current = Date.now(); // suppress self-notification
       await supabaseService.addShoppingItem(item, kitchenId);
     } catch {
       const fallback: ShoppingItem = { id: tempId, name, emoji: '🛍️' };
