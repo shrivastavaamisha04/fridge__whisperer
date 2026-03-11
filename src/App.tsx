@@ -1,8 +1,9 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { FridgeItem, ShoppingItem } from './types';
 import { getFoodInfo } from './services/geminiService';
 import { supabaseService } from './services/supabaseService';
 import FridgeCard from './components/FridgeCard';
+import VoiceInput from './components/VoiceInput';
 
 const StrawberryWallpaper = () => (
   <div
@@ -33,6 +34,10 @@ export default function App() {
   );
   const [kitchenId, setKitchenId] = useState(() => localStorage.getItem('kitchen_id') || '');
   const [userName, setUserName] = useState(() => localStorage.getItem('user_name') || '');
+  const [householdName, setHouseholdName] = useState(() => localStorage.getItem('household_name') || 'Our Kitchen');
+  const [editingHouseholdName, setEditingHouseholdName] = useState(false);
+  const [householdNameInput, setHouseholdNameInput] = useState('');
+  const householdNameInputRef = useRef<HTMLInputElement>(null);
 
   const [inventory, setInventory] = useState<FridgeItem[]>([]);
   const [shoppingList, setShoppingList] = useState<ShoppingItem[]>([]);
@@ -44,12 +49,11 @@ export default function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [copyFeedback, setCopyFeedback] = useState(false);
   const [synced, setSynced] = useState(false);
-  const lastActionTime = useRef(0); // To track local actions and avoid self-notifications
+  const lastActionTime = useRef(0);
 
-  // Initial Load & Real-time Sync
+  // ── Supabase: Initial Load & Real-time Sync ───────────────────────────────
   useEffect(() => {
     if (kitchenId && view === 'dashboard') {
-      // 1. Initial Fetch
       const load = async () => {
         try {
           const data = await supabaseService.fetchData(kitchenId);
@@ -57,33 +61,29 @@ export default function App() {
           setShoppingList(data.shoppingList);
           setSynced(true);
         } catch (error) {
-          console.error("Failed to load:", error);
+          console.error('Failed to load:', error);
         }
       };
       load();
 
-      // 2. Subscribe to changes
       const unsubscribe = supabaseService.subscribe(kitchenId, (payload) => {
-        load(); // Always reload data
-
-        // Notification Logic
-        if (Date.now() - lastActionTime.current > 2000) { // Only notify if not a local action
+        load();
+        if (Date.now() - lastActionTime.current > 2000) {
           if (Notification.permission === 'granted') {
             const event = payload.eventType;
-            const table = payload.table; // 'fridge_items' or 'shopping_items'
-
+            const table = payload.table;
             if (event === 'INSERT') {
               const name = payload.new.name;
-              new Notification(`New ${table === 'shopping_items' ? 'Shopping' : 'Fridge'} Item`, { body: `${name} was added to the list!` });
+              new Notification(`New ${table === 'shopping_items' ? 'Shopping' : 'Fridge'} Item`, {
+                body: `${name} was added to the list!`
+              });
             } else if (event === 'DELETE') {
-              // For deletes, we often only get ID, so a generic message is safer unless we cache names
-              new Notification('Item Removed', { body: `An item was checked off or removed.` });
+              new Notification('Item Removed', { body: 'An item was checked off or removed.' });
             }
           }
         }
       });
 
-      // Cleanup
       localStorage.setItem('kitchen_id', kitchenId);
       localStorage.setItem('user_name', userName);
 
@@ -91,22 +91,18 @@ export default function App() {
     }
   }, [kitchenId, view]);
 
-  // Expiry Check Effect
+  // ── Expiry push notifications ─────────────────────────────────────────────
   useEffect(() => {
     if (inventory.length === 0) return;
-
-    // Check if we already notified today to avoid spam
     const lastAlert = localStorage.getItem('last_expiry_alert');
     const today = new Date().toDateString();
-
     if (lastAlert !== today && Notification.permission === 'granted') {
       const expiringSoon = inventory.filter(item => {
         const daysLeft = Math.ceil((item.expiresAt - Date.now()) / (1000 * 60 * 60 * 24));
         return daysLeft <= 3 && daysLeft > 0;
       });
-
       if (expiringSoon.length > 0) {
-        new Notification('⚠️ Fridge Alert', {
+        new Notification('Fridge Alert', {
           body: `${expiringSoon.length} items are expiring within 3 days! Use them up!`
         });
         localStorage.setItem('last_expiry_alert', today);
@@ -114,23 +110,25 @@ export default function App() {
     }
   }, [inventory]);
 
-  // Removed the useEffect that saves to localStorage - we save to Cloud now!
+  // ── Household name persistence ────────────────────────────────────────────
+  useEffect(() => {
+    localStorage.setItem('household_name', householdName);
+  }, [householdName]);
 
   const requestNotifications = async () => {
     if (!('Notification' in window)) {
-      alert("This browser does not support desktop notifications");
+      alert('This browser does not support desktop notifications');
       return;
     }
     const permission = await Notification.requestPermission();
     if (permission === 'granted') {
-      new Notification("Notifications Enabled!", { body: "You will now see updates from your household." });
+      new Notification('Notifications Enabled!', { body: 'You will now see updates from your household.' });
     }
   };
 
   const handleStart = (e: React.FormEvent) => {
     e.preventDefault();
     if (userName.trim()) {
-      // If entering a new kitchen, create a truly unique ID if left blank
       if (!kitchenId.trim()) setKitchenId('HOME-' + Math.random().toString(36).substr(2, 5).toUpperCase());
       setView('dashboard');
     }
@@ -153,13 +151,33 @@ export default function App() {
     setTimeout(() => setCopyFeedback(false), 2000);
   };
 
+  // ── WhatsApp share ────────────────────────────────────────────────────────
+  const shareOnWhatsApp = () => {
+    const msg = `Hey! Join our household on Fridge Whisperer!\n\nHousehold: ${householdName}\nKey: ${kitchenId}\n\nOpen the app, enter this key and you're in:\nhttps://fridge-whisperer.vercel.app/`;
+    window.open(`https://wa.me/?text=${encodeURIComponent(msg)}`, '_blank');
+  };
+
+  // ── Household name editing ────────────────────────────────────────────────
+  const startEditingName = () => {
+    setHouseholdNameInput(householdName);
+    setEditingHouseholdName(true);
+    setTimeout(() => householdNameInputRef.current?.focus(), 50);
+  };
+
+  const saveHouseholdName = () => {
+    const trimmed = householdNameInput.trim();
+    if (trimmed) setHouseholdName(trimmed);
+    setEditingHouseholdName(false);
+  };
+
+  // ── Fridge operations (Supabase-backed) ──────────────────────────────────
   const addItemToFridge = async (name: string, sourceId?: string) => {
     if (!name.trim() || loading) return;
     setLoading(true);
     try {
       const info = await getFoodInfo(name);
       const item: FridgeItem = {
-        id: crypto.randomUUID(), // Better than random().toString()
+        id: crypto.randomUUID(),
         name: name.trim(),
         category: info.category,
         emoji: info.emoji,
@@ -167,50 +185,51 @@ export default function App() {
         expiresAt: Date.now() + (info.days * 86400000),
         quantity: itemQuantity,
       };
-
-      // OPTIMISTIC UPDATE (Show immediately)
-      setInventory(prev => [item, ...prev]);
+      setInventory(prev => [item, ...prev]); // optimistic
       setNewItem('');
-
-      // AB: Add to Cloud
       await supabaseService.addItem(item, kitchenId);
-
       if (sourceId) {
         setShoppingList(prev => prev.filter(x => x.id !== sourceId));
         await supabaseService.removeShoppingItem(sourceId);
       }
     } catch (err) {
       console.error(err);
-      // Revert optimism if needed (skipped for MVP simplicity)
     } finally {
       setLoading(false);
     }
   };
 
   const removeItem = async (id: string) => {
-    setInventory(prev => prev.filter(x => x.id !== id)); // Optimistic
+    setInventory(prev => prev.filter(x => x.id !== id)); // optimistic
     lastActionTime.current = Date.now();
     await supabaseService.removeItem(id);
   };
 
-  const addToShoppingList = async () => {
-    if (!newShoppingItem.trim()) return;
-    const item: ShoppingItem = {
-      id: crypto.randomUUID(),
-      name: newShoppingItem.trim(),
-      emoji: '🛍️'
-    };
-
-    setShoppingList(prev => [...prev, item]); // Optimistic
-    setNewShoppingItem('');
-
-    await supabaseService.addShoppingItem(item, kitchenId);
-  };
-
   const removeFromShoppingList = async (id: string) => {
-    setShoppingList(prev => prev.filter(x => x.id !== id)); // Optimistic
+    setShoppingList(prev => prev.filter(x => x.id !== id)); // optimistic
     lastActionTime.current = Date.now();
     await supabaseService.removeShoppingItem(id);
+  };
+
+  // ── Shopping list add (Supabase + emoji fetch) ────────────────────────────
+  const addShoppingItem = async () => {
+    if (!newShoppingItem.trim()) return;
+    const name = newShoppingItem.trim();
+    const tempId = crypto.randomUUID();
+    setShoppingList(prev => [...prev, { id: tempId, name, emoji: '⏳' }]);
+    setNewShoppingItem('');
+    try {
+      const info = await getFoodInfo(name);
+      const item: ShoppingItem = { id: tempId, name, emoji: info.emoji || '🛍️' };
+      setShoppingList(prev => prev.map(x => x.id === tempId ? item : x));
+      lastActionTime.current = Date.now();
+      await supabaseService.addShoppingItem(item, kitchenId);
+    } catch {
+      const fallback: ShoppingItem = { id: tempId, name, emoji: '🛍️' };
+      setShoppingList(prev => prev.map(x => x.id === tempId ? fallback : x));
+      lastActionTime.current = Date.now();
+      await supabaseService.addShoppingItem(fallback, kitchenId);
+    }
   };
 
   const groupedInventory = useMemo(() => {
@@ -219,7 +238,6 @@ export default function App() {
     if (sortBy === 'name') list.sort((a, b) => a.name.localeCompare(b.name));
     if (sortBy === 'expiry') list.sort((a, b) => a.expiresAt - b.expiresAt);
     if (sortBy === 'added') list.sort((a, b) => b.addedAt - a.addedAt);
-
     list.forEach(item => {
       const cat = item.category || 'Other';
       if (!groups[cat]) groups[cat] = [];
@@ -228,70 +246,64 @@ export default function App() {
     return groups;
   }, [inventory, sortBy]);
 
-
-  const addShoppingItem = async () => {
-    if (!newShoppingItem.trim()) return;
-
-    // 1. Optimistic UI update (temporary emoji)
-    const tempId = crypto.randomUUID();
-    setShoppingList(prev => [...prev, { id: tempId, name: newShoppingItem.trim(), emoji: '⏳' }]);
-    setNewShoppingItem('');
-
-    try {
-      // 2. Fetch AI info
-      const info = await getFoodInfo(newShoppingItem.trim());
-
-      const item: ShoppingItem = {
-        id: tempId,
-        name: newShoppingItem.trim(),
-        emoji: info.emoji || '🛍️'
-      };
-
-      // 3. Update state with real emoji
-      setShoppingList(prev => prev.map(x => x.id === tempId ? item : x));
-
-      // 4. Persist to DB
-      lastActionTime.current = Date.now();
-      await supabaseService.addShoppingItem(item, kitchenId);
-    } catch (err) {
-      console.error(err);
-      // Fallback if AI fails (keep generic or update)
-      const fallbackItem: ShoppingItem = {
-        id: tempId,
-        name: newShoppingItem.trim(),
-        emoji: '🛍️'
-      };
-      setShoppingList(prev => prev.map(x => x.id === tempId ? fallbackItem : x));
-      lastActionTime.current = Date.now();
-      await supabaseService.addShoppingItem(fallbackItem, kitchenId);
+  // Stable callback for VoiceInput — prevents stale closures in speech recognition
+  const handleTranscript = useCallback((text: string, isFinal: boolean) => {
+    setNewItem(text);
+    if (isFinal) {
+      document.querySelector<HTMLInputElement>('input[placeholder="Add to fridge..."]')?.focus();
     }
-  };
+  }, []);
 
+  // ─── LANDING PAGE ──────────────────────────────────────────────────────────
   if (view === 'landing') {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center p-6 relative overflow-hidden">
+      <div className="min-h-screen flex flex-col items-center justify-center px-5 py-10 relative overflow-hidden">
         <StrawberryWallpaper />
-        <div className="w-full max-w-sm space-y-12 text-center animate-in fade-in duration-700 relative z-10">
-          <div className="space-y-6">
-            <div className="w-24 h-24 bg-brand-500 rounded-[2.2rem] mx-auto flex items-center justify-center text-5xl shadow-2xl shadow-brand-500/30 animate-subtle-float">🍓</div>
+        <div className="w-full max-w-sm space-y-8 text-center animate-in fade-in duration-700 relative z-10">
+          <div className="space-y-4">
+            <div className="w-20 h-20 bg-brand-500 rounded-[2rem] mx-auto flex items-center justify-center text-4xl shadow-2xl shadow-brand-500/30 animate-subtle-float">
+              🍓
+            </div>
             <div>
-              <h1 className="text-4xl font-extrabold text-slate-900 tracking-tight leading-tight">The Fridge Whisperer</h1>
-              <p className="text-slate-500/80 font-semibold mt-3 text-lg leading-snug max-w-[280px] mx-auto">Your household's shared brain for a zero-waste kitchen.</p>
+              <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight leading-tight">
+                The Fridge Whisperer
+              </h1>
+              <p className="text-slate-500/80 font-semibold mt-2 text-base leading-snug max-w-[260px] mx-auto">
+                Your household's shared brain for a zero-waste kitchen.
+              </p>
             </div>
           </div>
 
-          <form onSubmit={handleStart} className="bg-white/90 backdrop-blur-md p-10 rounded-[3rem] shadow-soft space-y-8 border border-white">
-            <div className="text-left space-y-6">
+          <form onSubmit={handleStart} className="bg-white/90 backdrop-blur-md px-6 py-8 rounded-[2.5rem] shadow-soft space-y-6 border border-white">
+            <div className="text-left space-y-5">
               <div className="space-y-2">
-                <label className="text-[11px] font-black text-brand-500 uppercase tracking-[0.15em] ml-1">Your Name</label>
-                <input required placeholder="Amisha, Sharvi..." value={userName} onChange={e => setUserName(e.target.value)} className="w-full p-5 bg-slate-50/50 border border-slate-100 rounded-2xl outline-none font-bold text-slate-700 focus:border-brand-500 transition-all placeholder:text-slate-300" />
+                <label className="text-[11px] font-black text-brand-500 uppercase tracking-[0.15em] ml-1">
+                  Your Name
+                </label>
+                <input
+                  required
+                  placeholder="Amisha, Sharvi..."
+                  value={userName}
+                  onChange={e => setUserName(e.target.value)}
+                  className="w-full p-4 bg-slate-50/50 border border-slate-100 rounded-2xl outline-none font-bold text-slate-700 focus:border-brand-500 transition-all placeholder:text-slate-300 text-base"
+                />
               </div>
               <div className="space-y-2">
-                <label className="text-[11px] font-black text-brand-500 uppercase tracking-[0.15em] ml-1">Household ID (Optional)</label>
-                <input placeholder="Leave blank for new" value={kitchenId} onChange={e => setKitchenId(e.target.value)} className="w-full p-5 bg-slate-50/50 border border-slate-100 rounded-2xl outline-none font-bold text-slate-700 focus:border-brand-500 transition-all placeholder:text-slate-300" />
+                <label className="text-[11px] font-black text-brand-500 uppercase tracking-[0.15em] ml-1">
+                  Household ID (Optional)
+                </label>
+                <input
+                  placeholder="Leave blank for new"
+                  value={kitchenId}
+                  onChange={e => setKitchenId(e.target.value)}
+                  className="w-full p-4 bg-slate-50/50 border border-slate-100 rounded-2xl outline-none font-bold text-slate-700 focus:border-brand-500 transition-all placeholder:text-slate-300 text-base"
+                />
               </div>
             </div>
-            <button type="submit" className="w-full py-5 bg-brand-500 text-white font-black rounded-3xl shadow-xl shadow-brand-500/25 active:scale-[0.97] transition-all text-xl hover:bg-brand-600">
+            <button
+              type="submit"
+              className="w-full py-4 bg-brand-500 text-white font-black rounded-2xl shadow-xl shadow-brand-500/25 active:scale-[0.97] transition-all text-lg hover:bg-brand-600"
+            >
               Enter Kitchen
             </button>
           </form>
@@ -300,20 +312,30 @@ export default function App() {
     );
   }
 
+  // ─── DASHBOARD ─────────────────────────────────────────────────────────────
   return (
-    <div className="min-h-screen bg-[#fcfdfc] pb-24">
-      <header className="bg-brand-500 text-white pt-16 pb-20 px-10 rounded-header shadow-xl relative overflow-hidden">
-        <div className="absolute top-0 right-0 w-48 h-48 bg-white/5 rounded-full -mr-24 -mt-24 blur-3xl"></div>
+    <div className="min-h-screen bg-[#fcfdfc] pb-28">
+
+      {/* Header */}
+      <header className="bg-brand-500 text-white pt-12 pb-16 px-5 rounded-header shadow-xl relative overflow-hidden">
+        <div className="absolute top-0 right-0 w-40 h-40 bg-white/5 rounded-full -mr-20 -mt-20 blur-3xl" />
         <div className="flex justify-between items-start relative z-10">
-          <div className="space-y-1.5">
-            <h1 className="text-3xl font-extrabold tracking-tight">{userName}'s fridge space</h1>
-            <p className="text-[11px] font-black opacity-70 uppercase tracking-[0.18em]">KITCHEN ID: {kitchenId}</p>
+          <div className="space-y-0.5 flex-1 min-w-0 pr-3">
+            <h1 className="text-2xl font-extrabold tracking-tight truncate">
+              {householdName}
+            </h1>
+            <p className="text-[11px] font-semibold opacity-70">
+              Hi {userName} 👋
+            </p>
+            <p className="text-[10px] font-black opacity-50 uppercase tracking-[0.15em]">
+              ID: {kitchenId}
+            </p>
           </div>
           <button
             onClick={() => setIsSettingsOpen(true)}
-            className="w-12 h-12 bg-white/20 hover:bg-white/30 rounded-2xl flex items-center justify-center transition-all backdrop-blur-md border border-white/20 shadow-lg"
+            className="w-11 h-11 bg-white/20 hover:bg-white/30 rounded-2xl flex items-center justify-center transition-all backdrop-blur-md border border-white/20 shadow-lg flex-shrink-0"
           >
-            <svg className="w-7 h-7" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
             </svg>
@@ -323,98 +345,179 @@ export default function App() {
 
       {/* Settings Modal */}
       {isSettingsOpen && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-slate-900/40 backdrop-blur-sm animate-in fade-in duration-300">
-          <div className="w-full max-w-sm bg-white rounded-[3.5rem] p-10 shadow-2xl space-y-8 animate-in zoom-in-95 duration-300">
-            <div className="space-y-2 text-center">
-              <div className="w-14 h-14 bg-brand-50 rounded-2xl flex items-center justify-center text-2xl mx-auto mb-4">🏠</div>
-              <h3 className="text-2xl font-black text-slate-800 tracking-tight">Kitchen Heart</h3>
+        <div className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center bg-slate-900/40 backdrop-blur-sm animate-in fade-in duration-300">
+          <div className="w-full max-w-sm bg-white rounded-t-[2.5rem] sm:rounded-[3rem] px-6 py-8 shadow-2xl space-y-6 animate-in slide-in-from-bottom-4 sm:zoom-in-95 duration-300">
+
+            <div className="w-10 h-1 bg-slate-200 rounded-full mx-auto sm:hidden" />
+
+            <div className="space-y-1 text-center">
+              <div className="w-12 h-12 bg-brand-50 rounded-2xl flex items-center justify-center text-xl mx-auto mb-3">🏠</div>
+              <h3 className="text-xl font-black text-slate-800 tracking-tight">Kitchen Heart</h3>
               <p className="text-slate-400 font-bold text-sm">Household Control Center</p>
             </div>
 
-            <div className="space-y-5">
-              <div className="p-6 bg-slate-50/80 rounded-3xl border border-slate-100 flex flex-col gap-3">
-                <span className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] block">Your Secret Key</span>
-                <div className="flex items-center justify-between">
-                  <span className="font-mono font-black text-brand-600 text-lg tracking-wider">{kitchenId}</span>
+            <div className="space-y-4">
+
+              {/* Household name */}
+              <div className="p-5 bg-slate-50/80 rounded-2xl border border-slate-100">
+                <span className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] block mb-2">
+                  Household Name
+                </span>
+                {editingHouseholdName ? (
+                  <div className="flex items-center gap-2">
+                    <input
+                      ref={householdNameInputRef}
+                      value={householdNameInput}
+                      onChange={e => setHouseholdNameInput(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter') saveHouseholdName(); if (e.key === 'Escape') setEditingHouseholdName(false); }}
+                      onBlur={saveHouseholdName}
+                      className="flex-1 font-black text-slate-800 text-base bg-white border border-brand-200 rounded-xl px-3 py-2 outline-none focus:border-brand-500"
+                      maxLength={32}
+                    />
+                    <button
+                      onMouseDown={e => { e.preventDefault(); saveHouseholdName(); }}
+                      className="px-3 py-2 bg-brand-500 text-white rounded-xl font-black text-xs"
+                    >
+                      Save
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex items-center justify-between">
+                    <span className="font-black text-slate-800 text-base truncate">{householdName}</span>
+                    <button
+                      onClick={startEditingName}
+                      className="ml-3 px-3 py-1.5 rounded-xl font-black text-[10px] uppercase bg-slate-100 text-slate-500 hover:bg-brand-50 hover:text-brand-500 transition-all flex-shrink-0"
+                    >
+                      Rename
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* Household key + share */}
+              <div className="p-5 bg-slate-50/80 rounded-2xl border border-slate-100 flex flex-col gap-3">
+                <span className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] block">
+                  Household Key
+                </span>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-mono font-black text-brand-600 text-base tracking-wider truncate">
+                    {kitchenId}
+                  </span>
                   <button
                     onClick={copyToClipboard}
-                    className={`px-5 py-2.5 rounded-xl font-black text-[10px] uppercase transition-all shadow-sm ${copyFeedback ? 'bg-emerald-500 text-white scale-95' : 'bg-brand-500 text-white active:scale-95'}`}
+                    className={`px-3 py-2 rounded-xl font-black text-[10px] uppercase transition-all shadow-sm flex-shrink-0 ${copyFeedback ? 'bg-emerald-500 text-white scale-95' : 'bg-brand-500 text-white active:scale-95'}`}
                   >
-                    {copyFeedback ? 'Saved!' : 'Copy'}
+                    {copyFeedback ? 'Copied!' : 'Copy'}
                   </button>
                 </div>
-                <p className="text-[9px] font-bold text-slate-400 italic">Share this key with housemates so they can stay in sync.</p>
+                {/* WhatsApp share */}
+                <button
+                  onClick={shareOnWhatsApp}
+                  className="w-full flex items-center justify-center gap-2 py-3 bg-[#25D366] text-white font-black rounded-xl text-sm active:scale-[0.98] transition-all shadow-sm shadow-green-500/20"
+                >
+                  <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/>
+                  </svg>
+                  Invite on WhatsApp
+                </button>
+                <p className="text-[9px] font-bold text-slate-400 italic">
+                  Share this key so housemates can sync their fridge.
+                </p>
               </div>
 
-
-
-              <div className="p-4 bg-indigo-50 rounded-2xl border border-indigo-100 mb-4">
+              {/* Notifications */}
+              <div className="p-4 bg-indigo-50 rounded-2xl border border-indigo-100">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-bold text-indigo-900">Get Notified?</span>
-                  <button onClick={requestNotifications} className="px-5 py-2.5 bg-indigo-600 text-white text-[10px] font-black uppercase rounded-xl shadow-sm active:scale-95 transition-all">Enable</button>
+                  <button
+                    onClick={requestNotifications}
+                    className="px-4 py-2 bg-indigo-600 text-white text-[10px] font-black uppercase rounded-xl shadow-sm active:scale-95 transition-all"
+                  >
+                    Enable
+                  </button>
                 </div>
-                <p className="text-[9px] text-indigo-400 mt-1 font-semibold">Get alerts for expiring food & new items.</p>
+                <p className="text-[9px] text-indigo-400 mt-1 font-semibold">
+                  Get alerts for expiring food & new items.
+                </p>
               </div>
-            </div>
 
-            <div className="space-y-3">
               <button
                 onClick={handleLogout}
-                className="w-full py-5 bg-rose-50 text-rose-500 font-black rounded-3xl hover:bg-rose-100 active:scale-[0.98] transition-all text-xs uppercase tracking-widest shadow-sm hover:shadow-rose-100"
+                className="w-full py-4 bg-rose-50/50 text-rose-500 font-black rounded-2xl active:scale-[0.98] transition-all text-sm tracking-wide"
               >
                 Step out of this Kitchen
               </button>
-              <button
-                onClick={() => setIsSettingsOpen(false)}
-                className="w-full py-5 bg-slate-100 text-slate-400 font-black rounded-3xl hover:bg-slate-200 active:scale-[0.98] transition-all text-xs uppercase tracking-widest"
-              >
-                Go Back
-              </button>
             </div>
+
+            <button
+              onClick={() => setIsSettingsOpen(false)}
+              className="w-full py-3 text-slate-300 font-black text-[11px] uppercase tracking-[0.3em] transition-colors"
+            >
+              Go Back
+            </button>
           </div>
         </div>
       )}
 
-      <main className="max-w-xl mx-auto px-6 -mt-10 space-y-12 relative z-20">
-        <div className="bg-white p-2.5 pl-8 pr-2.5 rounded-[2.5rem] shadow-soft border border-slate-50 flex items-center gap-2 group transition-all focus-within:ring-4 focus-within:ring-brand-500/10">
-          <input
-            value={newItem}
-            onChange={e => setNewItem(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && addItemToFridge(newItem)}
-            placeholder="Add to fridge..."
-            className="flex-1 bg-transparent outline-none font-bold text-slate-700 placeholder:text-slate-300 text-lg min-w-0"
-          />
-          <select value={itemQuantity} onChange={e => setItemQuantity(e.target.value)} className="appearance-none bg-slate-50 border-none rounded-xl px-4 py-3 font-bold text-slate-500 text-sm cursor-pointer outline-none hover:bg-slate-100 transition-colors">
-            {QUANTITY_OPTIONS.map(q => <option key={q} value={q}>{q}</option>)}
-          </select>
-          <button onClick={() => addItemToFridge(newItem)} disabled={loading || !newItem.trim()} className="px-8 py-5 bg-brand-500 text-white font-black rounded-[1.8rem] shadow-lg shadow-brand-500/25 active:scale-[0.96] transition-all disabled:opacity-40 text-sm uppercase tracking-widest whitespace-nowrap">
-            {loading ? '...' : 'ADD'}
-          </button>
+      {/* Main Content */}
+      <main className="max-w-xl mx-auto px-4 -mt-8 space-y-8 relative z-20">
+
+        {/* ── Add to Fridge bar (two-row mobile layout) ── */}
+        <div className="bg-white rounded-[2rem] shadow-soft border border-slate-50 overflow-hidden focus-within:ring-4 focus-within:ring-brand-500/10 transition-all">
+          {/* Row 1: voice controls + text input */}
+          <div className="flex items-center gap-3 px-5 pt-4 pb-2">
+            <VoiceInput
+              disabled={loading}
+              onTranscript={handleTranscript}
+            />
+            <input
+              value={newItem}
+              onChange={e => setNewItem(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && addItemToFridge(newItem)}
+              placeholder="Add to fridge..."
+              className="flex-1 bg-transparent outline-none font-bold text-slate-700 placeholder:text-slate-300 text-base min-w-0"
+            />
+          </div>
+          {/* Row 2: quantity + ADD */}
+          <div className="flex items-center gap-2 px-3 pb-3">
+            <select
+              value={itemQuantity}
+              onChange={e => setItemQuantity(e.target.value)}
+              className="flex-1 appearance-none bg-slate-50 border-none rounded-xl px-3 py-3 font-bold text-slate-500 text-sm cursor-pointer outline-none"
+            >
+              {QUANTITY_OPTIONS.map(q => <option key={q} value={q}>{q}</option>)}
+            </select>
+            <button
+              onClick={() => addItemToFridge(newItem)}
+              disabled={loading || !newItem.trim()}
+              className="flex-1 py-3 bg-brand-500 text-white font-black rounded-xl shadow-lg shadow-brand-500/25 active:scale-[0.96] transition-all disabled:opacity-40 text-sm uppercase tracking-widest"
+            >
+              {loading ? '...' : 'ADD'}
+            </button>
+          </div>
         </div>
 
-        <div className="space-y-12">
-          {/* New Heading: In the fridge */}
-          <h2 className="text-[11px] font-black text-slate-400 uppercase tracking-[0.2em] px-4 -mb-6">In the fridge</h2>
-
+        {/* ── Fridge inventory ── */}
+        <div className="space-y-8">
+          <h2 className="text-[11px] font-black text-slate-400 uppercase tracking-[0.2em] px-2 -mb-4">
+            In the fridge
+          </h2>
           {Object.entries(groupedInventory).map(([category, items]) => (
-            <div key={category} className="space-y-6">
-              <div className="flex items-center gap-4 px-4">
+            <div key={category} className="space-y-3">
+              <div className="flex items-center gap-3 px-2">
                 <h3 className="text-[11px] font-black text-brand-500 uppercase tracking-[0.25em]">{category}</h3>
-                <div className="h-[1px] flex-1 bg-slate-100"></div>
+                <div className="h-[1px] flex-1 bg-slate-100" />
                 <span className="text-[10px] font-black text-slate-300 uppercase tracking-widest">{items.length}</span>
               </div>
-              <div className="space-y-4">
+              <div className="space-y-3">
                 {items.map(item => (
                   <FridgeCard
                     key={item.id}
                     item={item}
                     onRemove={(i) => removeItem(i.id)}
                     onMoveToList={async (i) => {
-                      // Optimistic move
                       setShoppingList(prev => [...prev, { id: i.id, name: i.name, emoji: i.emoji }]);
                       setInventory(prev => prev.filter(x => x.id !== i.id));
-
-                      // Persist changes
                       await supabaseService.addShoppingItem({ id: i.id, name: i.name, emoji: i.emoji }, kitchenId);
                       await supabaseService.removeItem(i.id);
                     }}
@@ -425,37 +528,51 @@ export default function App() {
           ))}
         </div>
 
-        <div className="space-y-6">
-          <h2 className="text-[11px] font-black text-slate-400 uppercase tracking-[0.2em] px-4">Shopping checklist</h2>
-          <div className="checklist-glass p-8 rounded-[3rem] border border-white shadow-soft space-y-6">
+        {/* ── Shopping checklist ── */}
+        <div className="space-y-4">
+          <h2 className="text-[11px] font-black text-slate-400 uppercase tracking-[0.2em] px-2">
+            Shopping checklist
+          </h2>
+          <div className="checklist-glass px-5 py-5 rounded-[2rem] border border-white shadow-soft space-y-4">
             {shoppingList.map(item => (
-              <div key={item.id} className="flex items-center justify-between group">
-                <div className="flex items-center gap-5">
-                  <button onClick={() => addItemToFridge(item.name, item.id)} className="w-11 h-11 bg-white border-2 border-slate-100 rounded-2xl flex items-center justify-center text-slate-200 hover:border-brand-500/50 hover:text-brand-500 transition-all shadow-sm">
-                    <div className="w-5 h-5 rounded-md border-2 border-slate-200 group-hover:border-brand-200 transition-colors"></div>
+              <div key={item.id} className="flex items-center justify-between">
+                <div className="flex items-center gap-4 flex-1 min-w-0">
+                  <button
+                    onClick={() => addItemToFridge(item.name, item.id)}
+                    className="w-10 h-10 bg-white border-2 border-slate-100 rounded-2xl flex items-center justify-center hover:border-brand-500/50 transition-all shadow-sm flex-shrink-0"
+                  >
+                    <div className="w-4 h-4 rounded-md border-2 border-slate-200" />
                   </button>
-                  <span className="font-bold text-slate-800 text-lg flex items-center gap-3">
-                    <span className="opacity-80">{item.emoji || '🛍️'}</span> {item.name}
+                  <span className="font-bold text-slate-800 text-base flex items-center gap-2 truncate">
+                    <span className="opacity-80">{item.emoji || '🛍️'}</span>
+                    <span className="truncate">{item.name}</span>
                   </span>
                 </div>
-                <button onClick={() => removeFromShoppingList(item.id)} className="w-9 h-9 flex items-center justify-center text-slate-200 hover:text-rose-400 opacity-0 group-hover:opacity-100 transition-all">
-                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M6 18L18 6M6 6l12 12" /></svg>
+                {/* Always visible on mobile — no hover-only */}
+                <button
+                  onClick={() => removeFromShoppingList(item.id)}
+                  className="w-9 h-9 flex items-center justify-center text-slate-300 hover:text-rose-400 flex-shrink-0 ml-2"
+                >
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
                 </button>
               </div>
             ))}
-            <div className="pt-6 border-t border-slate-100">
+            <div className="pt-4 border-t border-slate-100">
               <input
                 value={newShoppingItem}
                 onChange={e => setNewShoppingItem(e.target.value)}
                 onKeyDown={e => e.key === 'Enter' && addShoppingItem()}
                 placeholder="Add to shopping list..."
-                className="w-full bg-transparent outline-none font-bold text-slate-700 placeholder:text-slate-300 text-lg"
+                className="w-full bg-transparent outline-none font-bold text-slate-700 placeholder:text-slate-300 text-base"
               />
             </div>
           </div>
         </div>
       </main>
+
       <BackgroundIcons />
-    </div >
+    </div>
   );
 }

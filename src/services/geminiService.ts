@@ -1,4 +1,4 @@
-import { GoogleGenerativeAI, SchemaType } from "@google/generative-ai";
+import { GoogleGenAI, Type } from "@google/genai";
 import { FoodInfoResponse } from "../types";
 import { FALLBACK_FOOD_DATA } from "../constants";
 
@@ -6,37 +6,34 @@ export async function getFoodInfo(foodName: string): Promise<FoodInfoResponse> {
   const normalized = foodName.toLowerCase().trim();
   if (FALLBACK_FOOD_DATA[normalized]) return FALLBACK_FOOD_DATA[normalized];
 
-  const genAI = new GoogleGenerativeAI(import.meta.env.VITE_API_KEY || '');
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   try {
-    const model = genAI.getGenerativeModel({
-      model: "gemini-1.5-flash",
-      generationConfig: {
+    const response = await ai.models.generateContent({
+      model: "gemini-3-flash-preview",
+      contents: `You are a food identification assistant for an Indian household app.
+The food item name may be in any language — English, Hindi, Tamil, Telugu, Bengali, Marathi, Gujarati, Kannada, Malayalam, Punjabi, or transliterated (e.g. "doodh", "tamatar", "chawal").
+Identify the food item: "${foodName}"
+Return:
+- days: realistic shelf life in days when stored correctly in a fridge or pantry
+- category: one of Fruit, Vegetable, Dairy, Meat, Bakery, Pantry, Other
+- emoji: the single most recognisable emoji for this food item`,
+      config: {
         responseMimeType: "application/json",
         responseSchema: {
-          type: SchemaType.OBJECT,
+          type: Type.OBJECT,
           properties: {
-            days: { type: SchemaType.NUMBER },
-            category: { type: SchemaType.STRING },
-            emoji: { type: SchemaType.STRING },
+            days: { type: Type.INTEGER },
+            category: { type: Type.STRING },
+            emoji: { type: Type.STRING },
           },
           required: ["days", "category", "emoji"],
         },
       },
     });
-
-    const result = await model.generateContent(
-      `Provide grocery item info for "${foodName}". 
-      - Category: MUST be one of ['Fruit', 'Vegetable', 'Dairy', 'Meat', 'Bakery', 'Pantry', 'Frozen', 'Beverages', 'Snacks', 'Household'].
-      - If unsure (e.g. rice, pasta), use 'Pantry'. For ice cream, use 'Frozen'.
-      - Days: estimated days to expiry.
-      - Emoji: The single most specific emoji for this exact food item. (e.g. for "Grapes" return "🍇", NOT "🍎" or "🥗").`
-    );
-    const text = result.response.text();
+    const text = response.text || "{}";
     return JSON.parse(text) as FoodInfoResponse;
   } catch (error) {
-    console.warn("Gemini AI error/fallback:", error);
-    // Defaulting to Vegetable is safer than Meat/Dairy, but might misclassify Fruits.
-    // Ideally user inputs specific category, but for now we fallback to Vegetable.
-    return { days: 7, category: "Vegetable", emoji: "🍱" };
+    console.warn("Gemini AI error, using fallback:", error);
+    return { days: 5, category: "Grocery", emoji: "🍱" };
   }
 }

@@ -1,0 +1,332 @@
+import React, { useState, useRef, useCallback, useEffect } from 'react';
+import ReactDOM from 'react-dom';
+import { transcribeAudio, INDIAN_LANGUAGES } from '../services/sarvamService';
+
+type RecordingState = 'idle' | 'recording' | 'processing' | 'error';
+
+interface VoiceInputProps {
+  onTranscript: (text: string, isFinal: boolean) => void;
+  disabled?: boolean;
+}
+
+const ERROR_DISMISS_MS = 2500;
+const MAX_RECORDING_MS = 30_000;
+
+// Check if browser supports Web Speech API
+const hasSpeechRecognition = typeof window !== 'undefined' &&
+  ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window);
+
+const SpeechRecognitionAPI = hasSpeechRecognition
+  ? (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
+  : null;
+
+export default function VoiceInput({ onTranscript, disabled }: VoiceInputProps) {
+  const [state, setState] = useState<RecordingState>('idle');
+  const [selectedLang, setSelectedLang] = useState('hi-IN');
+  const [showLangMenu, setShowLangMenu] = useState(false);
+  const [menuPos, setMenuPos] = useState({ top: 0, left: 0 });
+  const [errorMsg, setErrorMsg] = useState('');
+  const [elapsed, setElapsed] = useState(0);
+
+  const recognitionRef = useRef<any>(null);
+  // Sarvam fallback refs
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const maxTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const errorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const langBtnRef = useRef<HTMLButtonElement>(null);
+
+  const currentLang = INDIAN_LANGUAGES.find(l => l.code === selectedLang)!;
+
+  const showError = useCallback((msg: string) => {
+    setErrorMsg(msg);
+    setState('error');
+    if (errorTimerRef.current) clearTimeout(errorTimerRef.current);
+    errorTimerRef.current = setTimeout(() => {
+      setErrorMsg('');
+      setState('idle');
+    }, ERROR_DISMISS_MS);
+  }, []);
+
+  const stopRecording = useCallback(() => {
+    if (timerRef.current) clearInterval(timerRef.current);
+    if (maxTimerRef.current) clearTimeout(maxTimerRef.current);
+    // Stop Web Speech API
+    if (recognitionRef.current) {
+      recognitionRef.current.stop();
+      recognitionRef.current = null;
+    }
+    // Stop MediaRecorder fallback
+    if (mediaRecorderRef.current?.state === 'recording') {
+      mediaRecorderRef.current.stop();
+    }
+  }, []);
+
+  // ── Web Speech API (primary — real-time) ─────────────────────────────────
+  const startWithSpeechAPI = useCallback(() => {
+    const recognition = new SpeechRecognitionAPI();
+    recognitionRef.current = recognition;
+
+    recognition.lang = selectedLang;
+    recognition.interimResults = true;  // fire as you speak
+    recognition.continuous = true;      // keep going until user taps stop
+    recognition.maxAlternatives = 1;
+
+    recognition.onstart = () => {
+      setState('recording');
+      setElapsed(0);
+      timerRef.current = setInterval(() => setElapsed(s => s + 1), 1000);
+      maxTimerRef.current = setTimeout(stopRecording, MAX_RECORDING_MS);
+    };
+
+    recognition.onresult = (event: any) => {
+      let interimText = '';
+      let finalText = '';
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const t = event.results[i][0].transcript;
+        if (event.results[i].isFinal) finalText += t;
+        else interimText += t;
+      }
+      // Send interim text so it shows in the input in real-time
+      if (interimText) onTranscript(interimText, false);
+      if (finalText)   onTranscript(finalText, true);
+    };
+
+    recognition.onerror = (event: any) => {
+      if (event.error === 'not-allowed') showError('Mic access denied');
+      else if (event.error === 'no-speech') showError('Nothing heard — try again');
+      else showError('Could not transcribe');
+      if (timerRef.current) clearInterval(timerRef.current);
+      if (maxTimerRef.current) clearTimeout(maxTimerRef.current);
+    };
+
+    recognition.onend = () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+      if (maxTimerRef.current) clearTimeout(maxTimerRef.current);
+      setState('idle');
+      recognitionRef.current = null;
+    };
+
+    try {
+      recognition.start();
+    } catch {
+      showError('Could not start mic');
+    }
+  }, [selectedLang, onTranscript, stopRecording, showError]);
+
+  // ── Sarvam fallback (when Web Speech API unavailable) ────────────────────
+  const startWithSarvam = useCallback(async () => {
+    setElapsed(0);
+    audioChunksRef.current = [];
+
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch {
+      showError('Mic access denied');
+      return;
+    }
+
+    const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+      ? 'audio/webm;codecs=opus'
+      : 'audio/webm';
+
+    const recorder = new MediaRecorder(stream, { mimeType });
+    mediaRecorderRef.current = recorder;
+
+    recorder.ondataavailable = (e) => {
+      if (e.data.size > 0) audioChunksRef.current.push(e.data);
+    };
+
+    recorder.onstop = async () => {
+      stream.getTracks().forEach(t => t.stop());
+      setState('processing');
+      try {
+        const blob = new Blob(audioChunksRef.current, { type: mimeType });
+        const result = await transcribeAudio(blob, selectedLang);
+        const text = result.transcript.trim();
+        if (text) {
+          onTranscript(text, true);
+          setState('idle');
+        } else {
+          showError('Nothing heard — try again');
+        }
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : '';
+        showError(msg.includes('API key') ? 'Sarvam API key missing' : 'Could not transcribe');
+      }
+    };
+
+    recorder.start(250);
+    setState('recording');
+    timerRef.current = setInterval(() => setElapsed(s => s + 1), 1000);
+    maxTimerRef.current = setTimeout(stopRecording, MAX_RECORDING_MS);
+  }, [selectedLang, onTranscript, stopRecording, showError]);
+
+  const handleMicClick = () => {
+    if (disabled || state === 'processing') return;
+    if (state === 'recording') {
+      stopRecording();
+    } else {
+      setShowLangMenu(false);
+      if (hasSpeechRecognition) startWithSpeechAPI();
+      else startWithSarvam();
+    }
+  };
+
+  const handleLangBtnClick = () => {
+    if (state === 'recording' || state === 'processing') return;
+    if (langBtnRef.current) {
+      const rect = langBtnRef.current.getBoundingClientRect();
+      setMenuPos({
+        top: rect.bottom + 8,
+        left: Math.min(rect.left, window.innerWidth - 196),
+      });
+    }
+    setShowLangMenu(v => !v);
+  };
+
+  // Close lang menu on outside click
+  useEffect(() => {
+    if (!showLangMenu) return;
+    const handler = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest('[data-lang-menu]')) setShowLangMenu(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [showLangMenu]);
+
+  const formatTime = (s: number) =>
+    `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+
+  // ── Language picker portal ────────────────────────────────────────────────
+  const langMenuPortal = showLangMenu ? ReactDOM.createPortal(
+    <>
+      <div className="fixed inset-0 z-[190]" onClick={() => setShowLangMenu(false)} />
+      <div
+        data-lang-menu
+        className="fixed z-[200] bg-white rounded-2xl shadow-2xl border border-slate-100 w-48 animate-in fade-in zoom-in-95 duration-150"
+        style={{ top: menuPos.top, left: menuPos.left, maxHeight: '55vh', overflowY: 'auto' }}
+      >
+        <div className="flex items-center justify-between px-4 pt-3 pb-2 border-b border-slate-100">
+          <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Language</span>
+          <button
+            onClick={() => setShowLangMenu(false)}
+            className="w-6 h-6 flex items-center justify-center rounded-full hover:bg-slate-100 text-slate-400"
+          >
+            <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round">
+              <path d="M18 6L6 18M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+        <div className="p-1.5 space-y-0.5">
+          {INDIAN_LANGUAGES.map(lang => (
+            <button
+              key={lang.code}
+              type="button"
+              onClick={() => { setSelectedLang(lang.code); setShowLangMenu(false); }}
+              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-left transition-all
+                ${selectedLang === lang.code ? 'bg-brand-500 text-white' : 'hover:bg-slate-50 text-slate-700'}`}
+            >
+              <span className="w-4 text-center font-black text-sm flex-shrink-0">{lang.script}</span>
+              <span className="text-xs font-bold flex-1">{lang.label}</span>
+              {selectedLang === lang.code && (
+                <svg className="w-3 h-3 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round">
+                  <path d="M20 6L9 17l-5-5" />
+                </svg>
+              )}
+            </button>
+          ))}
+        </div>
+      </div>
+    </>,
+    document.body
+  ) : null;
+
+  return (
+    <>
+      {/* Toasts */}
+      {state === 'error' && errorMsg && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[200] pointer-events-none animate-in fade-in slide-in-from-top-2 duration-200" style={{ whiteSpace: 'nowrap' }}>
+          <span className="bg-slate-800/90 text-white text-xs font-bold px-4 py-2 rounded-full shadow-xl">
+            ⚠️ {errorMsg}
+          </span>
+        </div>
+      )}
+      {state === 'recording' && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[200] pointer-events-none animate-in fade-in duration-200" style={{ whiteSpace: 'nowrap' }}>
+          <span className="bg-rose-500 text-white text-xs font-black px-4 py-2 rounded-full shadow-xl flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-white animate-pulse" />
+            {formatTime(elapsed)} · tap mic to stop
+          </span>
+        </div>
+      )}
+
+      {langMenuPortal}
+
+      {/* Controls */}
+      <div className="flex items-center gap-1.5 flex-shrink-0">
+        {/* Globe / language button */}
+        <button
+          ref={langBtnRef}
+          type="button"
+          data-lang-menu
+          onClick={handleLangBtnClick}
+          disabled={state === 'recording' || state === 'processing'}
+          className={`flex flex-col items-center justify-center w-11 h-11 rounded-2xl border transition-all
+            ${state === 'recording' || state === 'processing'
+              ? 'opacity-30 cursor-default bg-slate-50 border-slate-100'
+              : showLangMenu
+              ? 'bg-brand-50 border-brand-200 text-brand-500'
+              : 'bg-slate-50 border-slate-100 text-slate-400 hover:bg-brand-50 hover:border-brand-200 hover:text-brand-500 active:scale-95'}`}
+          title="Select language"
+        >
+          <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="12" cy="12" r="10" /><line x1="2" y1="12" x2="22" y2="12" />
+            <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+          </svg>
+          <span className="text-[8px] font-black leading-none mt-0.5 text-brand-500">
+            {currentLang.script}
+          </span>
+        </button>
+
+        {/* Mic button */}
+        <button
+          type="button"
+          onClick={handleMicClick}
+          disabled={state === 'processing' || disabled}
+          title={state === 'recording' ? 'Tap to stop' : 'Tap to speak'}
+          className={`relative w-11 h-11 rounded-2xl flex items-center justify-center transition-all flex-shrink-0
+            ${state === 'recording'
+              ? 'bg-rose-500 text-white shadow-lg shadow-rose-500/40'
+              : state === 'processing'
+              ? 'bg-slate-100 text-slate-400 cursor-wait'
+              : 'bg-slate-50 text-slate-400 hover:bg-brand-50 hover:text-brand-500 active:scale-95'}`}
+        >
+          {state === 'recording' && (
+            <span className="absolute inset-0 rounded-2xl bg-rose-400 animate-ping opacity-25 pointer-events-none" />
+          )}
+          {state === 'processing' ? (
+            <svg className="w-5 h-5 animate-spin" viewBox="0 0 24 24" fill="none">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3V4a8 8 0 100 16v-2a6 6 0 010-12z" />
+            </svg>
+          ) : state === 'recording' ? (
+            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+              <rect x="6" y="6" width="12" height="12" rx="2" />
+            </svg>
+          ) : (
+            <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="9" y="2" width="6" height="12" rx="3" />
+              <path d="M5 10a7 7 0 0014 0" />
+              <line x1="12" y1="19" x2="12" y2="22" />
+              <line x1="9" y1="22" x2="15" y2="22" />
+            </svg>
+          )}
+        </button>
+      </div>
+    </>
+  );
+}
