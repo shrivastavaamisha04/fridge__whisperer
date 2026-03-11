@@ -16,6 +16,20 @@ function cleanName(s: string): string {
   return s.trim().replace(/[।.!?،؟]+$/, '').trim();
 }
 
+// Translate a non-English food word to its English name via Gemini
+async function translateToEnglish(ai: GoogleGenAI, localWord: string): Promise<string> {
+  try {
+    const resp = await ai.models.generateContent({
+      model: "gemini-2.0-flash",
+      contents: `What is the standard English name for this food item: "${localWord}"? Reply with ONLY the English food name, one or two words maximum, nothing else. Example: if input is "दूध", reply "Milk". If input is "टमाटर", reply "Tomato".`,
+    });
+    const eng = (resp.text || '').trim().replace(/["""]/g, '').trim();
+    return eng || localWord;
+  } catch {
+    return localWord;
+  }
+}
+
 // Parse a multi-item voice transcript into individual fridge items
 export async function parseItemList(transcript: string, langCode: string): Promise<ParsedItem[]> {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
@@ -27,14 +41,17 @@ export async function parseItemList(transcript: string, langCode: string): Promi
 Voice transcript: "${transcript}"
 
 Extract EACH food/grocery item mentioned and return a JSON array. For each item:
-- "name": English normalised name (e.g. "Milk", "Carrot", "Tomatoes")
-- "localName": exact name as spoken — preserve original script if non-English (e.g. "दूध", "গাজর"). If already English, same as name.
+- "name": MUST be the English name only. Translate from any language. NEVER put Hindi/Devanagari/Bengali/Tamil/any non-Latin script in this field. Examples: "दूध"→"Milk", "टमाटर"→"Tomato", "गाजर"→"Carrot", "प्याज"→"Onion", "आलू"→"Potato", "दही"→"Yogurt"
+- "localName": the exact word as spoken, in the original script (e.g. "टमाटर", "দুধ"). If the user spoke in English, set localName same as name.
 - "emoji": single most relevant food emoji
 - "category": one of Fruit, Vegetable, Dairy, Meat, Bakery, Pantry, Other
 - "shelfLifeDays": realistic integer days fresh in fridge
 - "quantity": normalise from any language — "ek kilo"/"एक किलो" → "1 kg", "paanch sau gram" → "500 gm", default "500 gm"
 
-Return ONLY the raw JSON array with no markdown fences. Example: [{"name":"Carrot","localName":"गाजर","emoji":"🥕","category":"Vegetable","shelfLifeDays":21,"quantity":"500 gm"}]`,
+CRITICAL RULE: "name" field must ALWAYS be English. This is non-negotiable.
+Return ONLY the raw JSON array with no markdown fences.
+Example input: "टमाटर और गाजर"
+Example output: [{"name":"Tomato","localName":"टमाटर","emoji":"🍅","category":"Vegetable","shelfLifeDays":7,"quantity":"500 gm"},{"name":"Carrot","localName":"गाजर","emoji":"🥕","category":"Vegetable","shelfLifeDays":21,"quantity":"500 gm"}]`,
       config: {
         responseMimeType: "application/json",
       },
@@ -43,9 +60,28 @@ Return ONLY the raw JSON array with no markdown fences. Example: [{"name":"Carro
     // Strip any accidental markdown fences
     const json = text.replace(/^```[a-z]*\n?/i, '').replace(/\n?```$/i, '').trim();
     const parsed = JSON.parse(json) as ParsedItem[];
-    return Array.isArray(parsed) && parsed.length > 0 ? parsed : [];
+    if (!Array.isArray(parsed) || parsed.length === 0) return [];
+
+    console.log('[Gemini parseItemList] raw result:', JSON.stringify(parsed));
+
+    // Post-process: if "name" is non-English (Gemini ignored our instruction), translate it
+    const processed = await Promise.all(parsed.map(async (item) => {
+      const nameIsNonEnglish = /[^\x00-\x7F]/.test(item.name);
+      if (nameIsNonEnglish) {
+        // Gemini put local script in "name" — save it as localName and translate
+        const localWord = item.name;
+        if (!item.localName || item.localName === item.name) {
+          item.localName = localWord;
+        }
+        item.name = await translateToEnglish(ai, localWord);
+        console.log(`[Gemini parseItemList] auto-translated "${localWord}" → "${item.name}"`);
+      }
+      return item;
+    }));
+
+    return processed;
   } catch (error) {
-    console.error("parseItemList error:", error);
+    console.error("parseItemList error, using fallback:", error);
     // Fallback: split by commas / semicolons / Hindi conjunctions / Devanagari danda
     const parts = transcript
       .split(/[,;।\n]|\s+और\s+|\s+aur\s+|\s+and\s+/i)
@@ -55,9 +91,11 @@ Return ONLY the raw JSON array with no markdown fences. Example: [{"name":"Carro
     return Promise.all(segments.map(async part => {
       const info = await getFoodInfo(part);
       const isNonEnglish = /[^\x00-\x7F]/.test(part);
+      // For non-English parts, try to get an English name
+      const englishName = isNonEnglish ? await translateToEnglish(ai, part) : part;
       return {
-        name: part,          // will be corrected in confirmAddToFridge if non-English
-        localName: isNonEnglish ? part : part,
+        name: englishName,
+        localName: isNonEnglish ? part : englishName,
         emoji: info.emoji,
         category: info.category,
         shelfLifeDays: info.days,
@@ -77,7 +115,7 @@ export async function parseShoppingItems(transcript: string, langCode: string): 
 Voice transcript: "${transcript}"
 
 Extract EACH grocery/shopping item mentioned and return a JSON array. For each:
-- "name": English normalised name
+- "name": English name only (translate from any language — "टमाटर"→"Tomato", "दूध"→"Milk", etc.)
 - "emoji": single most relevant emoji
 
 Return ONLY the raw JSON array, no markdown. Example: [{"name":"Onion","emoji":"🧅"},{"name":"Tomato","emoji":"🍅"}]`,
@@ -107,7 +145,7 @@ export async function getFoodInfo(foodName: string): Promise<FoodInfoResponse> {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   try {
     const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
+      model: "gemini-2.0-flash",
       contents: `You are a food identification assistant for an Indian household app.
 The food item name may be in any language — English, Hindi, Tamil, Telugu, Bengali, Marathi, Gujarati, Kannada, Malayalam, Punjabi, or transliterated (e.g. "doodh", "tamatar", "chawal").
 Identify the food item: "${foodName}"
