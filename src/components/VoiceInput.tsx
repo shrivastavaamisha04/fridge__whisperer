@@ -303,14 +303,14 @@ export default function VoiceInput({ lang, onLangChange, onTranscript, onRelease
     <>
       {/* Toasts */}
       {state === 'error' && errorMsg && (
-        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[200] pointer-events-none animate-in fade-in slide-in-from-top-2 duration-200" style={{ whiteSpace: 'nowrap' }}>
+        <div className="fixed left-1/2 -translate-x-1/2 z-[200] pointer-events-none animate-in fade-in slide-in-from-top-2 duration-200" style={{ whiteSpace: 'nowrap', top: 'calc(env(safe-area-inset-top, 16px) + 52px)' }}>
           <span className="bg-slate-800/90 text-white text-xs font-bold px-4 py-2 rounded-full shadow-xl">
             ⚠️ {errorMsg}
           </span>
         </div>
       )}
       {state === 'recording' && (
-        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[200] pointer-events-none animate-in fade-in duration-200" style={{ whiteSpace: 'nowrap' }}>
+        <div className="fixed left-1/2 -translate-x-1/2 z-[200] pointer-events-none animate-in fade-in duration-200" style={{ whiteSpace: 'nowrap', top: 'calc(env(safe-area-inset-top, 16px) + 52px)' }}>
           <span className="bg-rose-500 text-white text-xs font-black px-4 py-2 rounded-full shadow-xl flex items-center gap-2">
             <span className="w-2 h-2 rounded-full bg-white animate-pulse" />
             {formatTime(elapsed)} · hold to speak, release to add

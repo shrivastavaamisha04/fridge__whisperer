@@ -30,3 +30,15 @@ export interface FoodInfoResponse {
   category: string;
   emoji: string;
 }
+
+// Used by the voice Review & Add confirmation sheet
+export interface ConfirmItem {
+  id: string;          // temp uuid for list key
+  name: string;
+  emoji: string;
+  quantity?: string;   // fridge only
+  category?: string;
+  shelfLifeDays?: number;
+  localName?: string;
+  localLang?: string;
+}

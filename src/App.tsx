@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { FridgeItem, ShoppingItem } from './types';
+import { FridgeItem, ShoppingItem, ConfirmItem } from './types';
 import { getFoodInfo, parseItemList, parseShoppingItems } from './services/geminiService';
 import { supabaseService } from './services/supabaseService';
 import FridgeCard from './components/FridgeCard';
 import VoiceInput from './components/VoiceInput';
 import HoldMicButton from './components/HoldMicButton';
 import HowToUse from './components/HowToUse';
+import VoiceConfirmSheet from './components/VoiceConfirmSheet';
 
 const StrawberryWallpaper = () => (
   <div
@@ -52,6 +53,11 @@ export default function App() {
   const [copyFeedback, setCopyFeedback] = useState(false);
   const [synced, setSynced] = useState(false);
   const [householdMembers, setHouseholdMembers] = useState<string[]>([]);
+  // Voice confirm sheet state
+  const [pendingFridgeItems, setPendingFridgeItems] = useState<ConfirmItem[] | null>(null);
+  const [pendingShoppingItems, setPendingShoppingItems] = useState<ConfirmItem[] | null>(null);
+  const [voiceProcessing, setVoiceProcessing] = useState(false);
+
   // Voice language — persisted per device so each household member remembers their own
   const [selectedLang, setSelectedLang] = useState(() => localStorage.getItem('voice_lang') || 'hi-IN');
   const handleLangChange = useCallback((lang: string) => {
@@ -234,24 +240,69 @@ export default function App() {
     }
   };
 
-  // ── Voice: batch-add to fridge on hold-release ────────────────────────────
+  // ── Voice: parse transcript → show confirm sheet (fridge) ─────────────────
   const handleVoiceRelease = useCallback(async (transcript: string) => {
     if (!transcript.trim() || loading) return;
     setNewItem('');
-    setLoading(true);
+    setVoiceProcessing(true);
     try {
       const parsed = await parseItemList(transcript, selectedLang);
-      for (const p of parsed) {
+      const confirmItems: ConfirmItem[] = parsed.map(p => {
         const isDifferentLang = p.localName && p.localName !== p.name;
+        return {
+          id: crypto.randomUUID(),
+          name: p.name,
+          emoji: p.emoji,
+          quantity: p.quantity || itemQuantity,
+          category: p.category,
+          shelfLifeDays: p.shelfLifeDays,
+          localName: isDifferentLang ? p.localName : undefined,
+          localLang: isDifferentLang ? selectedLang : undefined,
+        };
+      });
+      setPendingFridgeItems(confirmItems);
+    } catch (err) {
+      console.error('Voice parse failed:', err);
+      alert('Could not process voice input. Please try again.');
+    } finally {
+      setVoiceProcessing(false);
+    }
+  }, [selectedLang, loading, itemQuantity]);
+
+  // ── Voice: parse transcript → show confirm sheet (shopping) ───────────────
+  const handleShoppingVoiceRelease = useCallback(async (transcript: string) => {
+    if (!transcript.trim()) return;
+    setVoiceProcessing(true);
+    try {
+      const parsed = await parseShoppingItems(transcript, selectedLang);
+      const confirmItems: ConfirmItem[] = parsed.map(p => ({
+        id: crypto.randomUUID(),
+        name: p.name,
+        emoji: p.emoji || '🛍️',
+      }));
+      setPendingShoppingItems(confirmItems);
+    } catch (err) {
+      console.error('Shopping voice parse failed:', err);
+    } finally {
+      setVoiceProcessing(false);
+    }
+  }, [selectedLang]);
+
+  // ── Confirm: add reviewed fridge items ────────────────────────────────────
+  const confirmAddToFridge = useCallback(async (items: ConfirmItem[]) => {
+    setPendingFridgeItems(null);
+    setLoading(true);
+    try {
+      for (const p of items) {
         const item: FridgeItem = {
           id: crypto.randomUUID(),
           name: p.name,
-          localName: isDifferentLang ? p.localName : undefined,
-          localLang: isDifferentLang ? selectedLang : undefined,
-          category: p.category,
+          localName: p.localName,
+          localLang: p.localLang,
+          category: p.category || 'Other',
           emoji: p.emoji,
           addedAt: Date.now(),
-          expiresAt: Date.now() + (p.shelfLifeDays * 86400000),
+          expiresAt: Date.now() + ((p.shelfLifeDays || 7) * 86400000),
           quantity: p.quantity || itemQuantity,
         };
         setInventory(prev => [item, ...prev]);
@@ -259,29 +310,27 @@ export default function App() {
         await supabaseService.addItem(item, kitchenId);
       }
     } catch (err) {
-      console.error('Voice batch-add failed:', err);
-      alert('Could not process voice input. Please try again.');
+      console.error('Confirm fridge add failed:', err);
+      alert('Could not save items — check your internet connection.');
     } finally {
       setLoading(false);
     }
-  }, [selectedLang, kitchenId, loading, itemQuantity]);
+  }, [kitchenId, itemQuantity]);
 
-  // ── Voice: batch-add to shopping list on hold-release ─────────────────────
-  const handleShoppingVoiceRelease = useCallback(async (transcript: string) => {
-    if (!transcript.trim()) return;
+  // ── Confirm: add reviewed shopping items ──────────────────────────────────
+  const confirmAddToShoppingList = useCallback(async (items: ConfirmItem[]) => {
+    setPendingShoppingItems(null);
     try {
-      const parsed = await parseShoppingItems(transcript, selectedLang);
-      for (const p of parsed) {
-        const tempId = crypto.randomUUID();
-        const item: ShoppingItem = { id: tempId, name: p.name, emoji: p.emoji || '🛍️' };
+      for (const p of items) {
+        const item: ShoppingItem = { id: crypto.randomUUID(), name: p.name, emoji: p.emoji || '🛍️' };
         setShoppingList(prev => [...prev, item]);
         lastActionTime.current = Date.now();
         await supabaseService.addShoppingItem(item, kitchenId);
       }
     } catch (err) {
-      console.error('Shopping voice add failed:', err);
+      console.error('Confirm shopping add failed:', err);
     }
-  }, [selectedLang, kitchenId]);
+  }, [kitchenId]);
 
   // ── Update quantity on an existing fridge item ────────────────────────────
   const updateQuantity = useCallback(async (itemId: string, quantity: string) => {
@@ -597,7 +646,7 @@ export default function App() {
             <VoiceInput
               lang={selectedLang}
               onLangChange={handleLangChange}
-              disabled={loading}
+              disabled={loading || voiceProcessing}
               onTranscript={handleTranscript}
               onRelease={handleVoiceRelease}
             />
@@ -735,6 +784,24 @@ export default function App() {
 
       {/* How to use modal */}
       {showGuide && <HowToUse onClose={closeGuide} />}
+
+      {/* Voice confirm sheets */}
+      {pendingFridgeItems && (
+        <VoiceConfirmSheet
+          mode="fridge"
+          items={pendingFridgeItems}
+          onConfirm={confirmAddToFridge}
+          onCancel={() => setPendingFridgeItems(null)}
+        />
+      )}
+      {pendingShoppingItems && (
+        <VoiceConfirmSheet
+          mode="shopping"
+          items={pendingShoppingItems}
+          onConfirm={confirmAddToShoppingList}
+          onCancel={() => setPendingShoppingItems(null)}
+        />
+      )}
 
       <BackgroundIcons />
     </div>
