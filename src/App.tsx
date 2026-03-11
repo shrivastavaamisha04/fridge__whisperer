@@ -664,15 +664,9 @@ export default function App() {
 
         {/* ── Shopping checklist ── */}
         <div className="space-y-4">
-          <div className="flex items-center justify-between px-2">
-            <h2 className="text-[11px] font-black text-slate-400 uppercase tracking-[0.2em]">
-              Shopping checklist
-            </h2>
-            <HoldMicButton
-              lang={selectedLang}
-              onRelease={handleShoppingVoiceRelease}
-            />
-          </div>
+          <h2 className="text-[11px] font-black text-slate-400 uppercase tracking-[0.2em] px-2">
+            Shopping checklist
+          </h2>
           <div className="checklist-glass px-5 py-5 rounded-[2rem] border border-white shadow-soft space-y-4">
             {shoppingList.map(item => (
               <div key={item.id} className="flex items-center justify-between">
@@ -699,13 +693,17 @@ export default function App() {
                 </button>
               </div>
             ))}
-            <div className="pt-4 border-t border-slate-100">
+            <div className="pt-4 border-t border-slate-100 flex items-center gap-3">
+              <HoldMicButton
+                lang={selectedLang}
+                onRelease={handleShoppingVoiceRelease}
+              />
               <input
                 value={newShoppingItem}
                 onChange={e => setNewShoppingItem(e.target.value)}
                 onKeyDown={e => e.key === 'Enter' && addShoppingItem()}
                 placeholder="Add to shopping list..."
-                className="w-full bg-transparent outline-none font-bold text-slate-700 placeholder:text-slate-300 text-base"
+                className="flex-1 bg-transparent outline-none font-bold text-slate-700 placeholder:text-slate-300 text-base"
               />
             </div>
           </div>

@@ -38,6 +38,7 @@ export default function VoiceInput({ lang, onLangChange, onTranscript, onRelease
   const langBtnRef = useRef<HTMLButtonElement>(null);
   const fullTranscriptRef = useRef('');
   const interimTranscriptRef = useRef('');
+  const isHoldingRef = useRef(false);
 
   const currentLang = INDIAN_LANGUAGES.find(l => l.code === lang) ?? INDIAN_LANGUAGES[0];
 
@@ -80,9 +81,11 @@ export default function VoiceInput({ lang, onLangChange, onTranscript, onRelease
     recognition.maxAlternatives = 1;
 
     recognition.onstart = () => {
-      setState('recording');
-      setElapsed(0);
-      timerRef.current = setInterval(() => setElapsed(s => s + 1), 1000);
+      // If user already released before recognition started, abort immediately
+      if (!isHoldingRef.current) {
+        try { recognition.abort(); } catch {}
+        return;
+      }
       maxTimerRef.current = setTimeout(stopRecording, MAX_RECORDING_MS);
     };
 
@@ -102,11 +105,12 @@ export default function VoiceInput({ lang, onLangChange, onTranscript, onRelease
     };
 
     recognition.onerror = (event: any) => {
-      if (event.error === 'not-allowed') showError('Mic access denied');
-      else if (event.error === 'no-speech') showError('Nothing heard — try again');
-      else showError('Could not transcribe');
       if (timerRef.current) clearInterval(timerRef.current);
       if (maxTimerRef.current) clearTimeout(maxTimerRef.current);
+      if (event.error === 'not-allowed') showError('Mic access denied');
+      else if (event.error === 'no-speech') setState('idle'); // silent reset for quick taps
+      else if (event.error !== 'aborted') showError('Could not transcribe');
+      else setState('idle');
     };
 
     recognition.onend = () => {
@@ -173,8 +177,6 @@ export default function VoiceInput({ lang, onLangChange, onTranscript, onRelease
     };
 
     recorder.start(250);
-    setState('recording');
-    timerRef.current = setInterval(() => setElapsed(s => s + 1), 1000);
     maxTimerRef.current = setTimeout(stopRecording, MAX_RECORDING_MS);
   }, [lang, onRelease, stopRecording, showError]);
 
@@ -182,13 +184,20 @@ export default function VoiceInput({ lang, onLangChange, onTranscript, onRelease
   const handlePointerDown = (e: React.PointerEvent<HTMLButtonElement>) => {
     if (disabled || state === 'processing' || state === 'recording') return;
     e.currentTarget.setPointerCapture(e.pointerId);
+    isHoldingRef.current = true;
+    // Immediate visual feedback — don't wait for recognition.onstart (async)
+    setState('recording');
+    setElapsed(0);
+    timerRef.current = setInterval(() => setElapsed(s => s + 1), 1000);
     setShowLangMenu(false);
     if (hasSpeechRecognition) startWithSpeechAPI();
     else startWithSarvam();
   };
 
   const handlePointerUp = () => {
-    if (state === 'recording') stopRecording();
+    isHoldingRef.current = false;
+    // Always call stop — don't rely on stale `state` value (race condition)
+    stopRecording();
   };
 
   const handleLangBtnClick = () => {
@@ -320,11 +329,13 @@ export default function VoiceInput({ lang, onLangChange, onTranscript, onRelease
           onPointerUp={handlePointerUp}
           onPointerLeave={handlePointerUp}
           onPointerCancel={handlePointerUp}
+          onContextMenu={(e) => e.preventDefault()}
           disabled={state === 'processing' || disabled}
           title={state === 'recording' ? 'Release to add' : 'Hold to speak'}
+          style={{ touchAction: 'none' }}
           className={`relative w-11 h-11 rounded-2xl flex items-center justify-center transition-all flex-shrink-0 select-none
             ${state === 'recording'
-              ? 'bg-rose-500 text-white shadow-lg shadow-rose-500/40 scale-110'
+              ? 'bg-rose-500 text-white shadow-lg shadow-rose-500/40 scale-125'
               : state === 'processing'
               ? 'bg-slate-100 text-slate-400 cursor-wait'
               : 'bg-slate-50 text-slate-400 hover:bg-brand-50 hover:text-brand-500 active:scale-95'}`}

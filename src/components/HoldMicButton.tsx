@@ -25,6 +25,7 @@ export default function HoldMicButton({ lang, onRelease, disabled }: HoldMicButt
   const maxTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const fullTranscriptRef = useRef('');
   const interimTranscriptRef = useRef('');
+  const isHoldingRef = useRef(false);
 
   const stop = useCallback(() => {
     if (maxTimerRef.current) clearTimeout(maxTimerRef.current);
@@ -52,7 +53,11 @@ export default function HoldMicButton({ lang, onRelease, disabled }: HoldMicButt
     r.maxAlternatives = 1;
 
     r.onstart = () => {
-      setState('recording');
+      // If user already released before recognition started, abort immediately
+      if (!isHoldingRef.current) {
+        try { r.abort(); } catch {}
+        return;
+      }
       maxTimerRef.current = setTimeout(stop, MAX_MS);
     };
 
@@ -66,9 +71,12 @@ export default function HoldMicButton({ lang, onRelease, disabled }: HoldMicButt
       interimTranscriptRef.current = interim;
     };
 
-    r.onerror = () => {
-      setState('error');
-      setTimeout(() => setState('idle'), 2000);
+    r.onerror = (event: any) => {
+      if (maxTimerRef.current) clearTimeout(maxTimerRef.current);
+      // Silently reset for no-speech/aborted (quick taps), show nothing
+      if (event.error === 'not-allowed') setState('error');
+      else setState('idle');
+      setTimeout(() => setState('idle'), event.error === 'not-allowed' ? 2000 : 0);
     };
 
     r.onend = () => {
@@ -108,18 +116,24 @@ export default function HoldMicButton({ lang, onRelease, disabled }: HoldMicButt
     };
 
     recorder.start(250);
-    setState('recording');
     maxTimerRef.current = setTimeout(stop, MAX_MS);
   }, [lang, onRelease, stop]);
 
   const handlePointerDown = (e: React.PointerEvent<HTMLButtonElement>) => {
     if (disabled || state !== 'idle') return;
     e.currentTarget.setPointerCapture(e.pointerId);
+    isHoldingRef.current = true;
+    // Immediate visual feedback
+    setState('recording');
     if (hasSpeechRecognition) startSpeechAPI();
     else startSarvam();
   };
 
-  const handlePointerUp = () => { if (state === 'recording') stop(); };
+  const handlePointerUp = () => {
+    isHoldingRef.current = false;
+    // Always call stop — don't check stale state
+    stop();
+  };
 
   return (
     <button
@@ -128,11 +142,13 @@ export default function HoldMicButton({ lang, onRelease, disabled }: HoldMicButt
       onPointerUp={handlePointerUp}
       onPointerLeave={handlePointerUp}
       onPointerCancel={handlePointerUp}
+      onContextMenu={(e) => e.preventDefault()}
       disabled={disabled || state === 'processing'}
       title={state === 'recording' ? 'Release to add' : 'Hold to speak'}
-      className={`relative w-8 h-8 rounded-xl flex items-center justify-center transition-all select-none flex-shrink-0
+      style={{ touchAction: 'none' }}
+      className={`relative w-10 h-10 rounded-2xl flex items-center justify-center transition-all select-none flex-shrink-0
         ${state === 'recording'
-          ? 'bg-rose-500 text-white shadow-md shadow-rose-500/30 scale-110'
+          ? 'bg-rose-500 text-white shadow-lg shadow-rose-500/40 scale-125'
           : state === 'processing'
           ? 'bg-slate-100 text-slate-300 cursor-wait'
           : state === 'error'
@@ -140,15 +156,21 @@ export default function HoldMicButton({ lang, onRelease, disabled }: HoldMicButt
           : 'bg-slate-100 text-slate-400 hover:bg-brand-50 hover:text-brand-500 active:scale-95'}`}
     >
       {state === 'recording' && (
-        <span className="absolute inset-0 rounded-xl bg-rose-400 animate-ping opacity-20 pointer-events-none" />
+        <span className="absolute inset-0 rounded-2xl bg-rose-400 animate-ping opacity-25 pointer-events-none" />
       )}
       {state === 'processing' ? (
-        <svg className="w-3.5 h-3.5 animate-spin" viewBox="0 0 24 24" fill="none">
+        <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none">
           <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
           <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3V4a8 8 0 100 16v-2a6 6 0 010-12z" />
         </svg>
+      ) : state === 'recording' ? (
+        // Stop icon when recording
+        <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+          <rect x="6" y="6" width="12" height="12" rx="2" />
+        </svg>
       ) : (
-        <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+        // Mic icon when idle/error
+        <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
           <rect x="9" y="2" width="6" height="12" rx="3" />
           <path d="M5 10a7 7 0 0014 0" />
           <line x1="12" y1="19" x2="12" y2="22" />
