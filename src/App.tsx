@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { FridgeItem, ShoppingItem } from './types';
-import { getFoodInfo } from './services/geminiService';
+import { getFoodInfo, parseItemList, parseShoppingItems } from './services/geminiService';
 import { supabaseService } from './services/supabaseService';
 import FridgeCard from './components/FridgeCard';
 import VoiceInput from './components/VoiceInput';
+import HoldMicButton from './components/HoldMicButton';
 import HowToUse from './components/HowToUse';
 
 const StrawberryWallpaper = () => (
@@ -27,7 +28,7 @@ const BackgroundIcons = () => (
 );
 
 type SortOption = 'expiry' | 'name' | 'added';
-const QUANTITY_OPTIONS = ['100 gm', '200 gm', '500 gm', '1 kg', '2 kg'];
+const QUANTITY_OPTIONS = ['100 gm', '200 gm', '500 gm', '1 kg', '2 kg', '250 ml', '500 ml', '1 litre', '2 litres'];
 
 export default function App() {
   const [view, setView] = useState<'landing' | 'dashboard'>(() =>
@@ -51,6 +52,12 @@ export default function App() {
   const [copyFeedback, setCopyFeedback] = useState(false);
   const [synced, setSynced] = useState(false);
   const [householdMembers, setHouseholdMembers] = useState<string[]>([]);
+  // Voice language — persisted per device so each household member remembers their own
+  const [selectedLang, setSelectedLang] = useState(() => localStorage.getItem('voice_lang') || 'hi-IN');
+  const handleLangChange = useCallback((lang: string) => {
+    setSelectedLang(lang);
+    localStorage.setItem('voice_lang', lang);
+  }, []);
   // Guide: auto-open on ?guide=true URL, or first visit (pill shown until dismissed)
   const [showGuide, setShowGuide] = useState(() =>
     new URLSearchParams(window.location.search).get('guide') === 'true'
@@ -210,9 +217,9 @@ export default function App() {
         expiresAt: Date.now() + (info.days * 86400000),
         quantity: itemQuantity,
       };
-      setInventory(prev => [item!, ...prev]); // optimistic
+      setInventory(prev => [item!, ...prev]);
       setNewItem('');
-      lastActionTime.current = Date.now(); // suppress self-notification
+      lastActionTime.current = Date.now();
       await supabaseService.addItem(item, kitchenId);
       if (sourceId) {
         setShoppingList(prev => prev.filter(x => x.id !== sourceId));
@@ -220,13 +227,68 @@ export default function App() {
       }
     } catch (err) {
       console.error('Failed to save item:', err);
-      // Roll back optimistic update if DB save failed
       if (item) setInventory(prev => prev.filter(x => x.id !== item!.id));
       alert('Could not save item — check your internet connection or Supabase setup.');
     } finally {
       setLoading(false);
     }
   };
+
+  // ── Voice: batch-add to fridge on hold-release ────────────────────────────
+  const handleVoiceRelease = useCallback(async (transcript: string) => {
+    if (!transcript.trim() || loading) return;
+    setNewItem('');
+    setLoading(true);
+    try {
+      const parsed = await parseItemList(transcript, selectedLang);
+      for (const p of parsed) {
+        const isDifferentLang = p.localName && p.localName !== p.name;
+        const item: FridgeItem = {
+          id: crypto.randomUUID(),
+          name: p.name,
+          localName: isDifferentLang ? p.localName : undefined,
+          localLang: isDifferentLang ? selectedLang : undefined,
+          category: p.category,
+          emoji: p.emoji,
+          addedAt: Date.now(),
+          expiresAt: Date.now() + (p.shelfLifeDays * 86400000),
+          quantity: p.quantity || itemQuantity,
+        };
+        setInventory(prev => [item, ...prev]);
+        lastActionTime.current = Date.now();
+        await supabaseService.addItem(item, kitchenId);
+      }
+    } catch (err) {
+      console.error('Voice batch-add failed:', err);
+      alert('Could not process voice input. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  }, [selectedLang, kitchenId, loading, itemQuantity]);
+
+  // ── Voice: batch-add to shopping list on hold-release ─────────────────────
+  const handleShoppingVoiceRelease = useCallback(async (transcript: string) => {
+    if (!transcript.trim()) return;
+    try {
+      const parsed = await parseShoppingItems(transcript, selectedLang);
+      for (const p of parsed) {
+        const tempId = crypto.randomUUID();
+        const item: ShoppingItem = { id: tempId, name: p.name, emoji: p.emoji || '🛍️' };
+        setShoppingList(prev => [...prev, item]);
+        lastActionTime.current = Date.now();
+        await supabaseService.addShoppingItem(item, kitchenId);
+      }
+    } catch (err) {
+      console.error('Shopping voice add failed:', err);
+    }
+  }, [selectedLang, kitchenId]);
+
+  // ── Update quantity on an existing fridge item ────────────────────────────
+  const updateQuantity = useCallback(async (itemId: string, quantity: string) => {
+    setInventory(prev => prev.map(x => x.id === itemId ? { ...x, quantity } : x));
+    lastActionTime.current = Date.now();
+    await supabaseService.updateItemQuantity(itemId, quantity);
+  }, []);
 
   const removeItem = async (id: string) => {
     setInventory(prev => prev.filter(x => x.id !== id)); // optimistic
@@ -275,12 +337,9 @@ export default function App() {
     return groups;
   }, [inventory, sortBy]);
 
-  // Stable callback for VoiceInput — prevents stale closures in speech recognition
-  const handleTranscript = useCallback((text: string, isFinal: boolean) => {
+  // Real-time display while holding mic — shows transcript in input
+  const handleTranscript = useCallback((text: string, _isFinal: boolean) => {
     setNewItem(text);
-    if (isFinal) {
-      document.querySelector<HTMLInputElement>('input[placeholder="Add to fridge..."]')?.focus();
-    }
   }, []);
 
   // ─── LANDING PAGE ──────────────────────────────────────────────────────────
@@ -536,8 +595,11 @@ export default function App() {
           {/* Row 1: voice controls + text input */}
           <div className="flex items-center gap-3 px-5 pt-4 pb-2">
             <VoiceInput
+              lang={selectedLang}
+              onLangChange={handleLangChange}
               disabled={loading}
               onTranscript={handleTranscript}
+              onRelease={handleVoiceRelease}
             />
             <input
               value={newItem}
@@ -583,10 +645,13 @@ export default function App() {
                   <FridgeCard
                     key={item.id}
                     item={item}
+                    viewerLang={selectedLang}
                     onRemove={(i) => removeItem(i.id)}
+                    onUpdateQuantity={updateQuantity}
                     onMoveToList={async (i) => {
                       setShoppingList(prev => [...prev, { id: i.id, name: i.name, emoji: i.emoji }]);
                       setInventory(prev => prev.filter(x => x.id !== i.id));
+                      lastActionTime.current = Date.now();
                       await supabaseService.addShoppingItem({ id: i.id, name: i.name, emoji: i.emoji }, kitchenId);
                       await supabaseService.removeItem(i.id);
                     }}
@@ -599,9 +664,15 @@ export default function App() {
 
         {/* ── Shopping checklist ── */}
         <div className="space-y-4">
-          <h2 className="text-[11px] font-black text-slate-400 uppercase tracking-[0.2em] px-2">
-            Shopping checklist
-          </h2>
+          <div className="flex items-center justify-between px-2">
+            <h2 className="text-[11px] font-black text-slate-400 uppercase tracking-[0.2em]">
+              Shopping checklist
+            </h2>
+            <HoldMicButton
+              lang={selectedLang}
+              onRelease={handleShoppingVoiceRelease}
+            />
+          </div>
           <div className="checklist-glass px-5 py-5 rounded-[2rem] border border-white shadow-soft space-y-4">
             {shoppingList.map(item => (
               <div key={item.id} className="flex items-center justify-between">

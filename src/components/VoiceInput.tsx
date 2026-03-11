@@ -5,14 +5,16 @@ import { transcribeAudio, INDIAN_LANGUAGES } from '../services/sarvamService';
 type RecordingState = 'idle' | 'recording' | 'processing' | 'error';
 
 interface VoiceInputProps {
+  lang: string;
+  onLangChange: (lang: string) => void;
   onTranscript: (text: string, isFinal: boolean) => void;
+  onRelease: (transcript: string) => void;
   disabled?: boolean;
 }
 
 const ERROR_DISMISS_MS = 2500;
 const MAX_RECORDING_MS = 30_000;
 
-// Check if browser supports Web Speech API
 const hasSpeechRecognition = typeof window !== 'undefined' &&
   ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window);
 
@@ -20,24 +22,24 @@ const SpeechRecognitionAPI = hasSpeechRecognition
   ? (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
   : null;
 
-export default function VoiceInput({ onTranscript, disabled }: VoiceInputProps) {
+export default function VoiceInput({ lang, onLangChange, onTranscript, onRelease, disabled }: VoiceInputProps) {
   const [state, setState] = useState<RecordingState>('idle');
-  const [selectedLang, setSelectedLang] = useState('hi-IN');
   const [showLangMenu, setShowLangMenu] = useState(false);
   const [menuPos, setMenuPos] = useState({ top: 0, left: 0 });
   const [errorMsg, setErrorMsg] = useState('');
   const [elapsed, setElapsed] = useState(0);
 
   const recognitionRef = useRef<any>(null);
-  // Sarvam fallback refs
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const maxTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const errorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const langBtnRef = useRef<HTMLButtonElement>(null);
+  const fullTranscriptRef = useRef('');
+  const interimTranscriptRef = useRef('');
 
-  const currentLang = INDIAN_LANGUAGES.find(l => l.code === selectedLang)!;
+  const currentLang = INDIAN_LANGUAGES.find(l => l.code === lang) ?? INDIAN_LANGUAGES[0];
 
   const showError = useCallback((msg: string) => {
     setErrorMsg(msg);
@@ -52,31 +54,29 @@ export default function VoiceInput({ onTranscript, disabled }: VoiceInputProps) 
   const stopRecording = useCallback(() => {
     if (timerRef.current) clearInterval(timerRef.current);
     if (maxTimerRef.current) clearTimeout(maxTimerRef.current);
-    // Stop Web Speech API
     if (recognitionRef.current) {
-      recognitionRef.current.stop();
-      recognitionRef.current = null;
+      try { recognitionRef.current.stop(); } catch {}
     }
-    // Stop MediaRecorder fallback
     if (mediaRecorderRef.current?.state === 'recording') {
       mediaRecorderRef.current.stop();
     }
   }, []);
 
-  // ── Web Speech API (primary — real-time) ─────────────────────────────────
+  // ── Web Speech API ────────────────────────────────────────────────────────
   const startWithSpeechAPI = useCallback(() => {
-    // Force-kill any lingering recognition before starting fresh
+    // Force-kill any lingering recognition
     if (recognitionRef.current) {
       try { recognitionRef.current.abort(); } catch {}
       recognitionRef.current = null;
     }
+    fullTranscriptRef.current = '';
+    interimTranscriptRef.current = '';
 
     const recognition = new SpeechRecognitionAPI();
     recognitionRef.current = recognition;
-
-    recognition.lang = selectedLang;
-    recognition.interimResults = true;  // fire as you speak
-    recognition.continuous = true;      // keep going until user taps stop
+    recognition.lang = lang;
+    recognition.interimResults = true;
+    recognition.continuous = true;
     recognition.maxAlternatives = 1;
 
     recognition.onstart = () => {
@@ -88,15 +88,17 @@ export default function VoiceInput({ onTranscript, disabled }: VoiceInputProps) 
 
     recognition.onresult = (event: any) => {
       let interimText = '';
-      let finalText = '';
       for (let i = event.resultIndex; i < event.results.length; i++) {
         const t = event.results[i][0].transcript;
-        if (event.results[i].isFinal) finalText += t;
-        else interimText += t;
+        if (event.results[i].isFinal) {
+          fullTranscriptRef.current += t + ' ';
+        } else {
+          interimText += t;
+        }
       }
-      // Send interim text so it shows in the input in real-time
-      if (interimText) onTranscript(interimText, false);
-      if (finalText)   onTranscript(finalText, true);
+      interimTranscriptRef.current = interimText;
+      const display = (fullTranscriptRef.current + interimText).trim();
+      if (display) onTranscript(display, false);
     };
 
     recognition.onerror = (event: any) => {
@@ -110,6 +112,11 @@ export default function VoiceInput({ onTranscript, disabled }: VoiceInputProps) 
     recognition.onend = () => {
       if (timerRef.current) clearInterval(timerRef.current);
       if (maxTimerRef.current) clearTimeout(maxTimerRef.current);
+      // Include any final interim text
+      const final = (fullTranscriptRef.current + ' ' + interimTranscriptRef.current).trim();
+      if (final) onRelease(final);
+      fullTranscriptRef.current = '';
+      interimTranscriptRef.current = '';
       setState('idle');
       recognitionRef.current = null;
     };
@@ -119,12 +126,13 @@ export default function VoiceInput({ onTranscript, disabled }: VoiceInputProps) 
     } catch {
       showError('Could not start mic');
     }
-  }, [selectedLang, onTranscript, stopRecording, showError]);
+  }, [lang, onTranscript, onRelease, stopRecording, showError]);
 
-  // ── Sarvam fallback (when Web Speech API unavailable) ────────────────────
+  // ── Sarvam fallback ───────────────────────────────────────────────────────
   const startWithSarvam = useCallback(async () => {
     setElapsed(0);
     audioChunksRef.current = [];
+    fullTranscriptRef.current = '';
 
     let stream: MediaStream;
     try {
@@ -150,10 +158,10 @@ export default function VoiceInput({ onTranscript, disabled }: VoiceInputProps) 
       setState('processing');
       try {
         const blob = new Blob(audioChunksRef.current, { type: mimeType });
-        const result = await transcribeAudio(blob, selectedLang);
+        const result = await transcribeAudio(blob, lang);
         const text = result.transcript.trim();
         if (text) {
-          onTranscript(text, true);
+          onRelease(text);
           setState('idle');
         } else {
           showError('Nothing heard — try again');
@@ -168,17 +176,19 @@ export default function VoiceInput({ onTranscript, disabled }: VoiceInputProps) 
     setState('recording');
     timerRef.current = setInterval(() => setElapsed(s => s + 1), 1000);
     maxTimerRef.current = setTimeout(stopRecording, MAX_RECORDING_MS);
-  }, [selectedLang, onTranscript, stopRecording, showError]);
+  }, [lang, onRelease, stopRecording, showError]);
 
-  const handleMicClick = () => {
-    if (disabled || state === 'processing') return;
-    if (state === 'recording') {
-      stopRecording();
-    } else {
-      setShowLangMenu(false);
-      if (hasSpeechRecognition) startWithSpeechAPI();
-      else startWithSarvam();
-    }
+  // ── Hold-to-speak handlers ────────────────────────────────────────────────
+  const handlePointerDown = (e: React.PointerEvent<HTMLButtonElement>) => {
+    if (disabled || state === 'processing' || state === 'recording') return;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    setShowLangMenu(false);
+    if (hasSpeechRecognition) startWithSpeechAPI();
+    else startWithSarvam();
+  };
+
+  const handlePointerUp = () => {
+    if (state === 'recording') stopRecording();
   };
 
   const handleLangBtnClick = () => {
@@ -191,6 +201,11 @@ export default function VoiceInput({ onTranscript, disabled }: VoiceInputProps) 
       });
     }
     setShowLangMenu(v => !v);
+  };
+
+  const handleLangSelect = (code: string) => {
+    onLangChange(code);
+    setShowLangMenu(false);
   };
 
   // Close lang menu on outside click
@@ -228,17 +243,17 @@ export default function VoiceInput({ onTranscript, disabled }: VoiceInputProps) 
           </button>
         </div>
         <div className="p-1.5 space-y-0.5">
-          {INDIAN_LANGUAGES.map(lang => (
+          {INDIAN_LANGUAGES.map(l => (
             <button
-              key={lang.code}
+              key={l.code}
               type="button"
-              onClick={() => { setSelectedLang(lang.code); setShowLangMenu(false); }}
+              onClick={() => handleLangSelect(l.code)}
               className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-left transition-all
-                ${selectedLang === lang.code ? 'bg-brand-500 text-white' : 'hover:bg-slate-50 text-slate-700'}`}
+                ${lang === l.code ? 'bg-brand-500 text-white' : 'hover:bg-slate-50 text-slate-700'}`}
             >
-              <span className="w-4 text-center font-black text-sm flex-shrink-0">{lang.script}</span>
-              <span className="text-xs font-bold flex-1">{lang.label}</span>
-              {selectedLang === lang.code && (
+              <span className="w-4 text-center font-black text-sm flex-shrink-0">{l.script}</span>
+              <span className="text-xs font-bold flex-1">{l.label}</span>
+              {lang === l.code && (
                 <svg className="w-3 h-3 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round">
                   <path d="M20 6L9 17l-5-5" />
                 </svg>
@@ -265,7 +280,7 @@ export default function VoiceInput({ onTranscript, disabled }: VoiceInputProps) 
         <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[200] pointer-events-none animate-in fade-in duration-200" style={{ whiteSpace: 'nowrap' }}>
           <span className="bg-rose-500 text-white text-xs font-black px-4 py-2 rounded-full shadow-xl flex items-center gap-2">
             <span className="w-2 h-2 rounded-full bg-white animate-pulse" />
-            {formatTime(elapsed)} · tap mic to stop
+            {formatTime(elapsed)} · hold to speak, release to add
           </span>
         </div>
       )}
@@ -298,15 +313,18 @@ export default function VoiceInput({ onTranscript, disabled }: VoiceInputProps) 
           </span>
         </button>
 
-        {/* Mic button */}
+        {/* Mic button — hold to speak */}
         <button
           type="button"
-          onClick={handleMicClick}
+          onPointerDown={handlePointerDown}
+          onPointerUp={handlePointerUp}
+          onPointerLeave={handlePointerUp}
+          onPointerCancel={handlePointerUp}
           disabled={state === 'processing' || disabled}
-          title={state === 'recording' ? 'Tap to stop' : 'Tap to speak'}
-          className={`relative w-11 h-11 rounded-2xl flex items-center justify-center transition-all flex-shrink-0
+          title={state === 'recording' ? 'Release to add' : 'Hold to speak'}
+          className={`relative w-11 h-11 rounded-2xl flex items-center justify-center transition-all flex-shrink-0 select-none
             ${state === 'recording'
-              ? 'bg-rose-500 text-white shadow-lg shadow-rose-500/40'
+              ? 'bg-rose-500 text-white shadow-lg shadow-rose-500/40 scale-110'
               : state === 'processing'
               ? 'bg-slate-100 text-slate-400 cursor-wait'
               : 'bg-slate-50 text-slate-400 hover:bg-brand-50 hover:text-brand-500 active:scale-95'}`}

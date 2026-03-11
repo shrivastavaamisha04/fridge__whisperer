@@ -7,6 +7,8 @@ export interface FridgeItem {
   addedAt: number;
   expiresAt: number;
   quantity?: string;
+  localName?: string;  // name as spoken (e.g. "दूध", "টমেটো")
+  localLang?: string;  // language it was added in (e.g. "hi-IN", "bn-IN")
 }
 
 export interface ShoppingItem {

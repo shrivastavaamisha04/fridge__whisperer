@@ -19,6 +19,8 @@ export interface Database {
                     quantity: string
                     added_at: number
                     expires_at: number
+                    local_name: string | null
+                    local_lang: string | null
                 }
                 Insert: {
                     id: string
@@ -29,6 +31,8 @@ export interface Database {
                     quantity: string
                     added_at: number
                     expires_at: number
+                    local_name?: string | null
+                    local_lang?: string | null
                 }
                 Update: {
                     id?: string
@@ -39,6 +43,8 @@ export interface Database {
                     quantity?: string
                     added_at?: number
                     expires_at?: number
+                    local_name?: string | null
+                    local_lang?: string | null
                 }
             }
             shopping_items: {

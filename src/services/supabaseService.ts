@@ -60,7 +60,9 @@ export const supabaseService = {
             emoji: item.emoji,
             quantity: item.quantity,
             addedAt: item.added_at,
-            expiresAt: item.expires_at
+            expiresAt: item.expires_at,
+            localName: item.local_name ?? undefined,
+            localLang: item.local_lang ?? undefined,
         }));
 
         const shoppingList: ShoppingItem[] = (shopRes.data || []).map(item => ({
@@ -80,15 +82,22 @@ export const supabaseService = {
             name: item.name,
             category: item.category || 'Other',
             emoji: item.emoji || '📦',
-            quantity: item.quantity || '',
+            quantity: item.quantity || '500 gm',
             added_at: item.addedAt,
-            expires_at: item.expiresAt
+            expires_at: item.expiresAt,
+            local_name: item.localName || null,
+            local_lang: item.localLang || null,
         });
         if (error) throw new Error(error.message);
     },
 
     removeItem: async (itemId: string) => {
         const { error } = await supabase.from('fridge_items').delete().eq('id', itemId);
+        if (error) throw new Error(error.message);
+    },
+
+    updateItemQuantity: async (itemId: string, quantity: string) => {
+        const { error } = await supabase.from('fridge_items').update({ quantity }).eq('id', itemId);
         if (error) throw new Error(error.message);
     },
 
