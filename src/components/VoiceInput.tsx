@@ -70,8 +70,7 @@ export default function VoiceInput({ lang, onLangChange, onTranscript, onRelease
       try { recognitionRef.current.abort(); } catch {}
       recognitionRef.current = null;
     }
-    fullTranscriptRef.current = '';
-    interimTranscriptRef.current = '';
+    // Transcripts are cleared in handlePointerDown (not here) so restarts accumulate text
 
     const recognition = new SpeechRecognitionAPI();
     recognitionRef.current = recognition;
@@ -114,15 +113,25 @@ export default function VoiceInput({ lang, onLangChange, onTranscript, onRelease
     };
 
     recognition.onend = () => {
-      if (timerRef.current) clearInterval(timerRef.current);
       if (maxTimerRef.current) clearTimeout(maxTimerRef.current);
-      // Include any final interim text
+      recognitionRef.current = null;
+
+      // Mobile workaround: continuous mode fires onend after brief silence.
+      // If user is still holding, restart recognition to keep recording.
+      if (isHoldingRef.current) {
+        setTimeout(() => {
+          if (isHoldingRef.current) startWithSpeechAPI(); // restart, accumulated text preserved
+        }, 100);
+        return;
+      }
+
+      // User released — fire onRelease with everything captured
+      if (timerRef.current) clearInterval(timerRef.current);
       const final = (fullTranscriptRef.current + ' ' + interimTranscriptRef.current).trim();
       if (final) onRelease(final);
       fullTranscriptRef.current = '';
       interimTranscriptRef.current = '';
       setState('idle');
-      recognitionRef.current = null;
     };
 
     try {
@@ -185,6 +194,8 @@ export default function VoiceInput({ lang, onLangChange, onTranscript, onRelease
     if (disabled || state === 'processing' || state === 'recording') return;
     e.currentTarget.setPointerCapture(e.pointerId);
     isHoldingRef.current = true;
+    fullTranscriptRef.current = '';
+    interimTranscriptRef.current = '';
     // Immediate visual feedback — don't wait for recognition.onstart (async)
     setState('recording');
     setElapsed(0);

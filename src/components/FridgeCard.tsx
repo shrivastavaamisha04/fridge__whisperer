@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import ReactDOM from 'react-dom';
 import { FridgeItem } from '../types';
 
 const QUANTITY_OPTIONS = ['100 gm', '200 gm', '500 gm', '1 kg', '2 kg', '250 ml', '500 ml', '1 litre', '2 litres'];
@@ -14,7 +15,8 @@ interface FridgeCardProps {
 const FridgeCard: React.FC<FridgeCardProps> = ({ item, viewerLang, onRemove, onMoveToList, onUpdateQuantity }) => {
   const [now, setNow] = useState(Date.now());
   const [showQtyPicker, setShowQtyPicker] = useState(false);
-  const qtyRef = useRef<HTMLDivElement>(null);
+  const [menuPos, setMenuPos] = useState({ top: 0, left: 0 });
+  const qtyBtnRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 60000);
@@ -25,12 +27,31 @@ const FridgeCard: React.FC<FridgeCardProps> = ({ item, viewerLang, onRemove, onM
   useEffect(() => {
     if (!showQtyPicker) return;
     const handler = (e: MouseEvent) => {
-      if (qtyRef.current && !qtyRef.current.contains(e.target as Node)) {
-        setShowQtyPicker(false);
-      }
+      const target = e.target as HTMLElement;
+      if (!target.closest('[data-qty-menu]')) setShowQtyPicker(false);
     };
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
+  }, [showQtyPicker]);
+
+  // Reposition on scroll/resize
+  useEffect(() => {
+    if (!showQtyPicker) return;
+    const reposition = () => {
+      if (qtyBtnRef.current) {
+        const rect = qtyBtnRef.current.getBoundingClientRect();
+        setMenuPos({
+          top: rect.bottom + 6,
+          left: rect.left,
+        });
+      }
+    };
+    window.addEventListener('scroll', reposition, true);
+    window.addEventListener('resize', reposition);
+    return () => {
+      window.removeEventListener('scroll', reposition, true);
+      window.removeEventListener('resize', reposition);
+    };
   }, [showQtyPicker]);
 
   const totalShelfLife = item.expiresAt - item.addedAt;
@@ -49,10 +70,48 @@ const FridgeCard: React.FC<FridgeCardProps> = ({ item, viewerLang, onRemove, onM
   const primaryName = isViewerLang ? item.localName! : item.name;
   const secondaryName = hasLocal ? (isViewerLang ? item.name : item.localName) : null;
 
+  const handleQtyBtnClick = () => {
+    if (qtyBtnRef.current) {
+      const rect = qtyBtnRef.current.getBoundingClientRect();
+      setMenuPos({
+        top: rect.bottom + 6,
+        left: rect.left,
+      });
+    }
+    setShowQtyPicker(v => !v);
+  };
+
   const handleQtySelect = (qty: string) => {
     setShowQtyPicker(false);
     onUpdateQuantity?.(item.id, qty);
   };
+
+  // Portal dropdown — renders outside any overflow:hidden containers
+  const qtyDropdown = showQtyPicker ? ReactDOM.createPortal(
+    <>
+      <div className="fixed inset-0 z-[190]" onClick={() => setShowQtyPicker(false)} />
+      <div
+        data-qty-menu
+        className="fixed z-[200] bg-white rounded-2xl shadow-2xl border border-slate-100 w-32 py-1.5 animate-in fade-in zoom-in-95 duration-150"
+        style={{ top: menuPos.top, left: menuPos.left }}
+      >
+        {QUANTITY_OPTIONS.map(opt => (
+          <button
+            key={opt}
+            data-qty-menu
+            onClick={() => handleQtySelect(opt)}
+            className={`w-full text-left px-3 py-2.5 text-xs font-bold transition-all
+              ${item.quantity === opt
+                ? 'text-brand-500 bg-brand-50'
+                : 'text-slate-600 hover:bg-slate-50 active:bg-slate-100'}`}
+          >
+            {opt}
+          </button>
+        ))}
+      </div>
+    </>,
+    document.body
+  ) : null;
 
   return (
     <div className="relative group animate-in fade-in slide-in-from-bottom-2 duration-500">
@@ -72,31 +131,15 @@ const FridgeCard: React.FC<FridgeCardProps> = ({ item, viewerLang, onRemove, onM
             <div className="w-14 h-14 bg-slate-50 rounded-full flex items-center justify-center text-3xl shadow-inner border border-white">
               <span className="group-hover:scale-110 transition-transform duration-500">{item.emoji}</span>
             </div>
-            {/* Tappable quantity badge */}
+            {/* Tappable quantity badge — dropdown via portal */}
             {onUpdateQuantity && (
-              <div ref={qtyRef} className="absolute -bottom-1 -left-1">
-                <button
-                  onClick={() => setShowQtyPicker(v => !v)}
-                  className="bg-white border border-slate-100 px-1.5 py-0.5 rounded-full text-[8px] font-black text-slate-400 uppercase tracking-widest shadow-sm hover:border-brand-300 hover:text-brand-500 transition-all whitespace-nowrap"
-                >
-                  {item.quantity || '500 gm'}
-                </button>
-                {/* Quantity dropdown */}
-                {showQtyPicker && (
-                  <div className="absolute bottom-full left-0 mb-2 bg-white rounded-2xl shadow-2xl border border-slate-100 z-50 w-28 py-1.5 animate-in fade-in zoom-in-95 duration-150">
-                    {QUANTITY_OPTIONS.map(opt => (
-                      <button
-                        key={opt}
-                        onClick={() => handleQtySelect(opt)}
-                        className={`w-full text-left px-3 py-2 text-xs font-bold transition-all
-                          ${item.quantity === opt ? 'text-brand-500 bg-brand-50' : 'text-slate-600 hover:bg-slate-50'}`}
-                      >
-                        {opt}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
+              <button
+                ref={qtyBtnRef}
+                onClick={handleQtyBtnClick}
+                className="absolute -bottom-1 -left-1 bg-white border border-slate-100 px-1.5 py-0.5 rounded-full text-[8px] font-black text-slate-400 uppercase tracking-widest shadow-sm hover:border-brand-300 hover:text-brand-500 active:scale-95 transition-all whitespace-nowrap"
+              >
+                {item.quantity || '500 gm'}
+              </button>
             )}
           </div>
 
@@ -139,6 +182,8 @@ const FridgeCard: React.FC<FridgeCardProps> = ({ item, viewerLang, onRemove, onM
           </button>
         </div>
       </div>
+
+      {qtyDropdown}
     </div>
   );
 };

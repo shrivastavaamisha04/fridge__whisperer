@@ -42,8 +42,7 @@ export default function HoldMicButton({ lang, onRelease, disabled }: HoldMicButt
       try { recognitionRef.current.abort(); } catch {}
       recognitionRef.current = null;
     }
-    fullTranscriptRef.current = '';
-    interimTranscriptRef.current = '';
+    // Transcripts cleared in handlePointerDown — restarts accumulate text
 
     const r = new SpeechRecognitionAPI();
     recognitionRef.current = r;
@@ -81,12 +80,21 @@ export default function HoldMicButton({ lang, onRelease, disabled }: HoldMicButt
 
     r.onend = () => {
       if (maxTimerRef.current) clearTimeout(maxTimerRef.current);
+      recognitionRef.current = null;
+
+      // Mobile workaround: restart if user is still holding
+      if (isHoldingRef.current) {
+        setTimeout(() => {
+          if (isHoldingRef.current) startSpeechAPI();
+        }, 100);
+        return;
+      }
+
       const final = (fullTranscriptRef.current + ' ' + interimTranscriptRef.current).trim();
       if (final) onRelease(final);
       fullTranscriptRef.current = '';
       interimTranscriptRef.current = '';
       setState('idle');
-      recognitionRef.current = null;
     };
 
     try { r.start(); } catch { setState('idle'); }
@@ -123,6 +131,8 @@ export default function HoldMicButton({ lang, onRelease, disabled }: HoldMicButt
     if (disabled || state !== 'idle') return;
     e.currentTarget.setPointerCapture(e.pointerId);
     isHoldingRef.current = true;
+    fullTranscriptRef.current = '';
+    interimTranscriptRef.current = '';
     // Immediate visual feedback
     setState('recording');
     if (hasSpeechRecognition) startSpeechAPI();
