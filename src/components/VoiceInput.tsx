@@ -27,13 +27,16 @@ const SpeechRecognitionAPI = hasSpeechRecognition
   ? (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
   : null;
 
-// Pick the best supported MIME type for this device
+// Pick the best supported MIME type for this device.
+// iOS Safari's isTypeSupported() falsely reports webm as supported but can
+// only actually record audio/mp4 — so we force mp4 on iOS.
 const getAudioMimeType = () => {
+  if (isIOS) return 'audio/mp4';
   const candidates = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/aac'];
   for (const t of candidates) {
     try { if (MediaRecorder.isTypeSupported(t)) return t; } catch {}
   }
-  return '';
+  return 'audio/mp4'; // safe fallback
 };
 
 export default function VoiceInput({ lang, onLangChange, onTranscript, onRelease, disabled }: VoiceInputProps) {
@@ -192,8 +195,15 @@ export default function VoiceInput({ lang, onLangChange, onTranscript, onRelease
           showError('Nothing heard — try again');
         }
       } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : '';
-        showError(msg.includes('API key') ? 'Sarvam API not configured' : 'Could not transcribe');
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error('[VoiceInput] transcribe error:', msg);
+        if (msg.toLowerCase().includes('api') || msg.includes('500') || msg.includes('key')) {
+          showError('Sarvam API not configured');
+        } else if (msg.includes('413')) {
+          showError('Recording too long — try shorter');
+        } else {
+          showError('Could not transcribe');
+        }
       }
     };
 

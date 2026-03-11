@@ -18,12 +18,15 @@ const SpeechRecognitionAPI = hasSpeechRecognition
   ? (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
   : null;
 
+// iOS Safari's isTypeSupported() falsely reports webm as supported but can
+// only actually record audio/mp4 — force mp4 on iOS.
 const getAudioMimeType = () => {
+  if (isIOS) return 'audio/mp4';
   const candidates = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/aac'];
   for (const t of candidates) {
     try { if (MediaRecorder.isTypeSupported(t)) return t; } catch {}
   }
-  return '';
+  return 'audio/mp4'; // safe fallback
 };
 
 const MAX_MS = 30_000;
