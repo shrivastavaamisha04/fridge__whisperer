@@ -785,6 +785,22 @@ export default function App() {
         </div>
       )}
 
+      {/* Voice processing toast — shown while Gemini parses the transcript */}
+      {voiceProcessing && (
+        <div
+          className="fixed left-1/2 -translate-x-1/2 z-[200] pointer-events-none animate-in fade-in duration-200"
+          style={{ whiteSpace: 'nowrap', top: 'calc(env(safe-area-inset-top, 16px) + 52px)' }}
+        >
+          <span className="bg-slate-800/90 text-white text-xs font-black px-4 py-2 rounded-full shadow-xl flex items-center gap-2">
+            <svg className="w-3 h-3 animate-spin flex-shrink-0" viewBox="0 0 24 24" fill="none">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3V4a8 8 0 100 16v-2a6 6 0 010-12z" />
+            </svg>
+            Analysing items…
+          </span>
+        </div>
+      )}
+
       {/* How to use modal */}
       {showGuide && <HowToUse onClose={closeGuide} />}
 
