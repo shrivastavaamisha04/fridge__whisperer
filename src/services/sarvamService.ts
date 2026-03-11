@@ -23,32 +23,30 @@ export async function transcribeAudio(
   audioBlob: Blob,
   languageCode: string = 'auto'
 ): Promise<SarvamSTTResponse> {
-  const apiKey = process.env.SARVAM_API_KEY;
-
-  if (!apiKey) {
-    throw new Error('Sarvam API key not configured. Add SARVAM_API_KEY to your .env.local file.');
+  // Convert blob to base64 — sent to our serverless proxy which holds the API key
+  const buffer = await audioBlob.arrayBuffer();
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  // Process in chunks to avoid stack overflow on large files
+  const chunkSize = 8192;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
   }
+  const base64 = btoa(binary);
 
-  const formData = new FormData();
-  // Sarvam accepts webm, wav, mp3, ogg, flac, aac
-  formData.append('file', audioBlob, 'recording.webm');
-  formData.append('model', 'saaras:v3');
-  formData.append('mode', 'transcribe');
-  if (languageCode && languageCode !== 'auto') {
-    formData.append('language_code', languageCode);
-  }
-
-  const response = await fetch(SARVAM_STT_URL, {
+  const response = await fetch('/api/transcribe', {
     method: 'POST',
-    headers: {
-      'api-subscription-key': apiKey,
-    },
-    body: formData,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      audio: base64,
+      mimeType: audioBlob.type || 'audio/webm',
+      languageCode,
+    }),
   });
 
   if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Sarvam API error ${response.status}: ${errorText}`);
+    const err = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
+    throw new Error(err.error || `API error ${response.status}`);
   }
 
   const data = await response.json();

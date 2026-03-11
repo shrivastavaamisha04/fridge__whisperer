@@ -9,11 +9,22 @@ interface HoldMicButtonProps {
   disabled?: boolean;
 }
 
+const isIOS = typeof window !== 'undefined' &&
+  /iPad|iPhone|iPod/.test(navigator.userAgent);
+
 const hasSpeechRecognition = typeof window !== 'undefined' &&
   ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window);
 const SpeechRecognitionAPI = hasSpeechRecognition
   ? (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
   : null;
+
+const getAudioMimeType = () => {
+  const candidates = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/aac'];
+  for (const t of candidates) {
+    try { if (MediaRecorder.isTypeSupported(t)) return t; } catch {}
+  }
+  return '';
+};
 
 const MAX_MS = 30_000;
 
@@ -106,7 +117,7 @@ export default function HoldMicButton({ lang, onRelease, disabled }: HoldMicButt
     try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
     catch { setState('idle'); return; }
 
-    const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : 'audio/webm';
+    const mimeType = getAudioMimeType();
     const recorder = new MediaRecorder(stream, { mimeType });
     mediaRecorderRef.current = recorder;
 
@@ -135,7 +146,8 @@ export default function HoldMicButton({ lang, onRelease, disabled }: HoldMicButt
     interimTranscriptRef.current = '';
     // Immediate visual feedback
     setState('recording');
-    if (hasSpeechRecognition) startSpeechAPI();
+    // iOS: skip webkitSpeechRecognition (can't restart from async callbacks)
+    if (hasSpeechRecognition && !isIOS) startSpeechAPI();
     else startSarvam();
   };
 

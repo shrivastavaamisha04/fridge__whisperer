@@ -15,12 +15,26 @@ interface VoiceInputProps {
 const ERROR_DISMISS_MS = 2500;
 const MAX_RECORDING_MS = 30_000;
 
+// iOS Safari's webkitSpeechRecognition cannot be restarted from async callbacks
+// (not a user gesture) — route iOS to MediaRecorder+Sarvam instead
+const isIOS = typeof window !== 'undefined' &&
+  /iPad|iPhone|iPod/.test(navigator.userAgent);
+
 const hasSpeechRecognition = typeof window !== 'undefined' &&
   ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window);
 
 const SpeechRecognitionAPI = hasSpeechRecognition
   ? (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
   : null;
+
+// Pick the best supported MIME type for this device
+const getAudioMimeType = () => {
+  const candidates = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/aac'];
+  for (const t of candidates) {
+    try { if (MediaRecorder.isTypeSupported(t)) return t; } catch {}
+  }
+  return '';
+};
 
 export default function VoiceInput({ lang, onLangChange, onTranscript, onRelease, disabled }: VoiceInputProps) {
   const [state, setState] = useState<RecordingState>('idle');
@@ -155,9 +169,7 @@ export default function VoiceInput({ lang, onLangChange, onTranscript, onRelease
       return;
     }
 
-    const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-      ? 'audio/webm;codecs=opus'
-      : 'audio/webm';
+    const mimeType = getAudioMimeType();
 
     const recorder = new MediaRecorder(stream, { mimeType });
     mediaRecorderRef.current = recorder;
@@ -181,7 +193,7 @@ export default function VoiceInput({ lang, onLangChange, onTranscript, onRelease
         }
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : '';
-        showError(msg.includes('API key') ? 'Sarvam API key missing' : 'Could not transcribe');
+        showError(msg.includes('API key') ? 'Sarvam API not configured' : 'Could not transcribe');
       }
     };
 
@@ -201,7 +213,8 @@ export default function VoiceInput({ lang, onLangChange, onTranscript, onRelease
     setElapsed(0);
     timerRef.current = setInterval(() => setElapsed(s => s + 1), 1000);
     setShowLangMenu(false);
-    if (hasSpeechRecognition) startWithSpeechAPI();
+    // iOS: skip webkitSpeechRecognition (can't restart from async callbacks)
+    if (hasSpeechRecognition && !isIOS) startWithSpeechAPI();
     else startWithSarvam();
   };
 
