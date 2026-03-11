@@ -59,6 +59,18 @@ export default function VoiceInput({ lang, onLangChange, onTranscript, onRelease
 
   const currentLang = INDIAN_LANGUAGES.find(l => l.code === lang) ?? INDIAN_LANGUAGES[0];
 
+  // Drive the elapsed timer purely from state — avoids race conditions with async startWithSarvam
+  useEffect(() => {
+    if (state !== 'recording') {
+      setElapsed(0);
+      return;
+    }
+    setElapsed(0);
+    const id = setInterval(() => setElapsed(s => s + 1), 1000);
+    timerRef.current = id;
+    return () => { clearInterval(id); timerRef.current = null; };
+  }, [state]);
+
   const showError = useCallback((msg: string) => {
     setErrorMsg(msg);
     setState('error');
@@ -70,7 +82,6 @@ export default function VoiceInput({ lang, onLangChange, onTranscript, onRelease
   }, []);
 
   const stopRecording = useCallback(() => {
-    if (timerRef.current) clearInterval(timerRef.current);
     if (maxTimerRef.current) clearTimeout(maxTimerRef.current);
     if (recognitionRef.current) {
       try { recognitionRef.current.stop(); } catch {}
@@ -160,7 +171,6 @@ export default function VoiceInput({ lang, onLangChange, onTranscript, onRelease
 
   // ── Sarvam fallback ───────────────────────────────────────────────────────
   const startWithSarvam = useCallback(async () => {
-    setElapsed(0);
     audioChunksRef.current = [];
     fullTranscriptRef.current = '';
 
@@ -218,10 +228,8 @@ export default function VoiceInput({ lang, onLangChange, onTranscript, onRelease
     isHoldingRef.current = true;
     fullTranscriptRef.current = '';
     interimTranscriptRef.current = '';
-    // Immediate visual feedback — don't wait for recognition.onstart (async)
+    // Immediate visual feedback — timer starts via useEffect when state → 'recording'
     setState('recording');
-    setElapsed(0);
-    timerRef.current = setInterval(() => setElapsed(s => s + 1), 1000);
     setShowLangMenu(false);
     // iOS: skip webkitSpeechRecognition (can't restart from async callbacks)
     if (hasSpeechRecognition && !isIOS) startWithSpeechAPI();
