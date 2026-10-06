@@ -1,4 +1,3 @@
-import { GoogleGenAI, Type } from "@google/genai";
 import { FoodInfoResponse } from "../types";
 import { FALLBACK_FOOD_DATA } from "../constants";
 
@@ -11,19 +10,35 @@ export interface ParsedItem {
   quantity: string;     // e.g. "1 kg", "500 gm"
 }
 
+// Call Gemini via our serverless proxy (api/gemini.ts) — the API key stays server-side
+async function generate(prompt: string, options: { json?: boolean; schema?: object } = {}): Promise<string> {
+  const response = await fetch('/api/gemini', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ prompt, ...options }),
+  });
+  const data = await response.json().catch(() => ({})) as { text?: string; error?: { message?: string } };
+  if (!response.ok) {
+    throw new Error(`Gemini proxy error ${response.status}: ${data.error?.message || response.statusText}`);
+  }
+  return data.text || '';
+}
+
+// Strip markdown fences around JSON — the model sometimes adds a stray run of 1-3 backticks
+function stripFences(s: string): string {
+  return s.trim().replace(/^`+[a-z]*\s*/i, '').replace(/\s*`+$/, '').trim();
+}
+
 // Strip trailing punctuation from a food name (danda, period, etc.)
 function cleanName(s: string): string {
   return s.trim().replace(/[।.!?،؟]+$/, '').trim();
 }
 
 // Translate a non-English food word to its English name via Gemini
-async function translateToEnglish(ai: GoogleGenAI, localWord: string): Promise<string> {
+async function translateToEnglish(localWord: string): Promise<string> {
   try {
-    const resp = await ai.models.generateContent({
-      model: "gemini-2.0-flash",
-      contents: `Translate this food item to English. Reply with ONLY 1-3 English words, no punctuation, no explanation. Input: "${localWord}"`,
-    });
-    const raw = (resp.text || '').trim().replace(/["""'.,!?]/g, '').trim();
+    const text = await generate(`Translate this food item to English. Reply with ONLY 1-3 English words, no punctuation, no explanation. Input: "${localWord}"`);
+    const raw = text.trim().replace(/["""'.,!?]/g, '').trim();
     // Only accept if response starts with a Latin letter (guards against Hindi/etc. slipping through)
     const match = raw.match(/^[A-Za-z][A-Za-z\s]{0,40}/);
     return match ? match[0].trim() : localWord;
@@ -34,12 +49,9 @@ async function translateToEnglish(ai: GoogleGenAI, localWord: string): Promise<s
 
 // Parse a multi-item voice transcript into individual fridge items
 export async function parseItemList(transcript: string, langCode: string): Promise<ParsedItem[]> {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   try {
     // Use plain JSON mode (no responseSchema) — array schemas can cause silent failures
-    const response = await ai.models.generateContent({
-      model: "gemini-2.0-flash",
-      contents: `You are a kitchen assistant for an Indian household app. The user spoke in language code "${langCode}".
+    const response = await generate(`You are a kitchen assistant for an Indian household app. The user spoke in language code "${langCode}".
 Voice transcript: "${transcript}"
 
 Extract EACH food/grocery item mentioned and return a JSON array. For each item:
@@ -53,14 +65,10 @@ Extract EACH food/grocery item mentioned and return a JSON array. For each item:
 CRITICAL RULE: "name" field must ALWAYS be English. This is non-negotiable.
 Return ONLY the raw JSON array with no markdown fences.
 Example input: "टमाटर और गाजर"
-Example output: [{"name":"Tomato","localName":"टमाटर","emoji":"🍅","category":"Vegetable","shelfLifeDays":7,"quantity":"500 gm"},{"name":"Carrot","localName":"गाजर","emoji":"🥕","category":"Vegetable","shelfLifeDays":21,"quantity":"500 gm"}]`,
-      config: {
-        responseMimeType: "application/json",
-      },
-    });
-    const text = (response.text || "").trim();
+Example output: [{"name":"Tomato","localName":"टमाटर","emoji":"🍅","category":"Vegetable","shelfLifeDays":7,"quantity":"500 gm"},{"name":"Carrot","localName":"गाजर","emoji":"🥕","category":"Vegetable","shelfLifeDays":21,"quantity":"500 gm"}]`, { json: true });
+    const text = response.trim();
     // Strip any accidental markdown fences
-    const json = text.replace(/^```[a-z]*\n?/i, '').replace(/\n?```$/i, '').trim();
+    const json = stripFences(text);
     const parsed = JSON.parse(json) as ParsedItem[];
     if (!Array.isArray(parsed) || parsed.length === 0) return [];
 
@@ -75,7 +83,7 @@ Example output: [{"name":"Tomato","localName":"टमाटर","emoji":"🍅","
         if (!item.localName || item.localName === item.name) {
           item.localName = localWord;
         }
-        item.name = await translateToEnglish(ai, localWord);
+        item.name = await translateToEnglish(localWord);
         console.log(`[Gemini parseItemList] auto-translated "${localWord}" → "${item.name}"`);
       }
       return item;
@@ -94,7 +102,7 @@ Example output: [{"name":"Tomato","localName":"टमाटर","emoji":"🍅","
       const info = await getFoodInfo(part);
       const isNonEnglish = /[^\x00-\x7F]/.test(part);
       // For non-English parts, try to get an English name
-      const englishName = isNonEnglish ? await translateToEnglish(ai, part) : part;
+      const englishName = isNonEnglish ? await translateToEnglish(part) : part;
       return {
         name: englishName,
         localName: isNonEnglish ? part : englishName,
@@ -109,24 +117,17 @@ Example output: [{"name":"Tomato","localName":"टमाटर","emoji":"🍅","
 
 // Parse a voice transcript into shopping list items (name + emoji only)
 export async function parseShoppingItems(transcript: string, langCode: string): Promise<Array<{ name: string; emoji: string }>> {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   try {
-    const response = await ai.models.generateContent({
-      model: "gemini-2.0-flash",
-      contents: `You are a kitchen assistant for an Indian household. The user spoke in language code "${langCode}".
+    const response = await generate(`You are a kitchen assistant for an Indian household. The user spoke in language code "${langCode}".
 Voice transcript: "${transcript}"
 
 Extract EACH grocery/shopping item mentioned and return a JSON array. For each:
 - "name": English name only (translate from any language — "टमाटर"→"Tomato", "दूध"→"Milk", etc.)
 - "emoji": single most relevant emoji
 
-Return ONLY the raw JSON array, no markdown. Example: [{"name":"Onion","emoji":"🧅"},{"name":"Tomato","emoji":"🍅"}]`,
-      config: {
-        responseMimeType: "application/json",
-      },
-    });
-    const text = (response.text || "").trim();
-    const json = text.replace(/^```[a-z]*\n?/i, '').replace(/\n?```$/i, '').trim();
+Return ONLY the raw JSON array, no markdown. Example: [{"name":"Onion","emoji":"🧅"},{"name":"Tomato","emoji":"🍅"}]`, { json: true });
+    const text = response.trim();
+    const json = stripFences(text);
     const parsed = JSON.parse(json) as Array<{ name: string; emoji: string }>;
     return Array.isArray(parsed) && parsed.length > 0 ? parsed : [];
   } catch (error) {
@@ -144,31 +145,25 @@ export async function getFoodInfo(foodName: string): Promise<FoodInfoResponse> {
   const normalized = foodName.toLowerCase().trim();
   if (FALLBACK_FOOD_DATA[normalized]) return FALLBACK_FOOD_DATA[normalized];
 
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   try {
-    const response = await ai.models.generateContent({
-      model: "gemini-2.0-flash",
-      contents: `You are a food identification assistant for an Indian household app.
+    const response = await generate(`You are a food identification assistant for an Indian household app.
 The food item name may be in any language — English, Hindi, Tamil, Telugu, Bengali, Marathi, Gujarati, Kannada, Malayalam, Punjabi, or transliterated (e.g. "doodh", "tamatar", "chawal").
 Identify the food item: "${foodName}"
 Return:
 - days: realistic shelf life in days when stored correctly in a fridge or pantry
 - category: one of Fruit, Vegetable, Dairy, Meat, Bakery, Pantry, Other
-- emoji: the single most recognisable emoji for this food item`,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            days: { type: Type.INTEGER },
-            category: { type: Type.STRING },
-            emoji: { type: Type.STRING },
-          },
-          required: ["days", "category", "emoji"],
+- emoji: the single most recognisable emoji for this food item`, {
+      schema: {
+        type: "OBJECT",
+        properties: {
+          days: { type: "INTEGER" },
+          category: { type: "STRING" },
+          emoji: { type: "STRING" },
         },
+        required: ["days", "category", "emoji"],
       },
     });
-    const text = response.text || "{}";
+    const text = response || "{}";
     return JSON.parse(text) as FoodInfoResponse;
   } catch (error) {
     console.warn("Gemini AI error, using fallback:", error);
