@@ -79,7 +79,6 @@ npm run lint     # tsc --noEmit; 19 pre-existing errors, all Supabase typing in 
 - Gemini moved server-side and model switched to `gemini-3.1-flash-lite`: commit `cd624af`, deployed and verified live (`/api/gemini` answers; no key in the JS bundle; `/api/transcribe` still works).
 - **Supabase is down**: project `lngvijyxgnjrwowaxijj` no longer resolves (deleted or paused), so fridge list, shopping list, household sharing and realtime sync don't work. Restore it, or create a new project with the 3 tables and update `VITE_SUPABASE_URL`/`VITE_SUPABASE_KEY` in Vercel + `.env.local`.
 - **To do**: rotate the Gemini key (the old one was publicly visible in the pre-proxy bundle). Optionally re-save `SARVAM_API_KEY` as a Secret in Vercel (dashboard flags it "Needs Attention"). Redeploy after changing either.
-- This `CLAUDE.md` is untracked (not committed).
 
 ## Brand
 
